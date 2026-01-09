@@ -100,6 +100,17 @@ func (m *Manager) Deploy(ctx context.Context, name string, topoPath string, opts
 
 	// Create and save metadata
 	meta := spec.NewClusterMeta(name, specification, opts.Backend, opts.MilvusVersion)
+
+	// Save Kubernetes specific options
+	if opts.Backend == spec.BackendKubernetes {
+		meta.Kubeconfig = opts.Kubeconfig
+		meta.KubeContext = opts.KubeContext
+		meta.Namespace = opts.Namespace
+		if meta.Namespace == "" {
+			meta.Namespace = specification.Global.Namespace
+		}
+	}
+
 	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
 		return fmt.Errorf("failed to save metadata: %w", err)
 	}
@@ -144,10 +155,7 @@ func (m *Manager) Start(ctx context.Context, name string) error {
 		return err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return err
 	}
@@ -182,10 +190,7 @@ func (m *Manager) Stop(ctx context.Context, name string) error {
 		return err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return err
 	}
@@ -220,10 +225,7 @@ func (m *Manager) Destroy(ctx context.Context, name string, force bool) error {
 		return err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return err
 	}
@@ -261,10 +263,7 @@ func (m *Manager) Display(ctx context.Context, name string) (*ClusterInfo, error
 		return nil, err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -312,10 +311,7 @@ func (m *Manager) List(ctx context.Context) ([]*spec.ClusterMeta, error) {
 		// Check actual status
 		specification, err := spec.LoadSpecification(m.TopologyPath(entry.Name()))
 		if err == nil {
-			exec, err := m.createExecutor(entry.Name(), specification, DeployOptions{
-				Backend:       meta.Backend,
-				MilvusVersion: meta.MilvusVersion,
-			})
+			exec, err := m.createExecutor(entry.Name(), specification, m.buildDeployOptions(meta))
 			if err == nil {
 				if running, _ := exec.IsRunning(ctx); running {
 					meta.Status = spec.StatusRunning
@@ -347,10 +343,7 @@ func (m *Manager) Logs(ctx context.Context, name string, service string, tail in
 		return "", err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return "", err
 	}
@@ -374,10 +367,7 @@ func (m *Manager) Scale(ctx context.Context, name string, component string, opts
 		return err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return err
 	}
@@ -448,10 +438,7 @@ func (m *Manager) GetReplicas(ctx context.Context, name string) (map[string]int,
 		return nil, err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -475,10 +462,7 @@ func (m *Manager) Upgrade(ctx context.Context, name string, version string) erro
 		return err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return err
 	}
@@ -533,10 +517,7 @@ func (m *Manager) GetVersion(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return "", err
 	}
@@ -560,10 +541,7 @@ func (m *Manager) GetConfig(ctx context.Context, name string) (map[string]interf
 		return nil, err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -587,10 +565,7 @@ func (m *Manager) SetConfig(ctx context.Context, name string, config map[string]
 		return err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return err
 	}
@@ -621,10 +596,7 @@ func (m *Manager) Diagnose(ctx context.Context, name string) (*executor.Diagnose
 		return nil, err
 	}
 
-	exec, err := m.createExecutor(name, specification, DeployOptions{
-		Backend:       meta.Backend,
-		MilvusVersion: meta.MilvusVersion,
-	})
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
 	if err != nil {
 		return nil, err
 	}
@@ -636,6 +608,17 @@ func (m *Manager) Diagnose(ctx context.Context, name string) (*executor.Diagnose
 func (m *Manager) Exists(name string) bool {
 	_, err := os.Stat(m.ClusterDir(name))
 	return err == nil
+}
+
+// buildDeployOptions builds DeployOptions from cluster metadata
+func (m *Manager) buildDeployOptions(meta *spec.ClusterMeta) DeployOptions {
+	return DeployOptions{
+		MilvusVersion: meta.MilvusVersion,
+		Backend:       meta.Backend,
+		Kubeconfig:    meta.Kubeconfig,
+		KubeContext:   meta.KubeContext,
+		Namespace:     meta.Namespace,
+	}
 }
 
 // createExecutor creates the appropriate executor based on backend

@@ -39,6 +39,11 @@ type ClusterMeta struct {
 	// Monitoring
 	PrometheusPort int `json:"prometheus_port,omitempty"`
 	GrafanaPort    int `json:"grafana_port,omitempty"`
+
+	// Kubernetes specific options (only set when Backend is kubernetes)
+	Kubeconfig  string `json:"kubeconfig,omitempty"`
+	KubeContext string `json:"kube_context,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
 }
 
 // SaveMeta saves cluster metadata to a file
