@@ -61,6 +61,7 @@ func init() {
 	rootCmd.AddCommand(newClusterCmd())
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newMirrorCmd())
+	rootCmd.AddCommand(newBenchCmd())
 }
 
 func newVersionCmd() *cobra.Command {
@@ -1407,6 +1408,268 @@ minio_servers:
     access_key: "minioadmin"
     secret_key: "minioadmin"
 `
+
+// ==================== Bench Commands ====================
+// Bench commands wrap go-vdbbench for Milvus benchmarking
+// Similar to how TiUP bench wraps go-tpc
+
+func newBenchCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "bench",
+		Short: "Run benchmark tests on Milvus",
+		Long: `Benchmark tools for testing Milvus performance using go-vdbbench.
+
+go-vdbbench is a pure Go vector database benchmark tool (similar to go-tpc for TiDB).
+It provides high-performance benchmarking for Milvus without external dependencies.
+
+Commands:
+  milvus    Run benchmark against Milvus
+
+Examples:
+  miup bench milvus prepare --uri localhost:19530              # Prepare test data
+  miup bench milvus search --uri localhost:19530               # Run search benchmark
+  miup bench milvus insert --uri localhost:19530               # Run insert benchmark
+  miup bench milvus cleanup --uri localhost:19530              # Clean up test data`,
+	}
+
+	cmd.AddCommand(newBenchMilvusCmd())
+
+	return cmd
+}
+
+// newBenchMilvusCmd creates Milvus benchmark commands
+func newBenchMilvusCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "milvus",
+		Short: "Benchmark Milvus vector database",
+		Long: `Run benchmark tests against a Milvus instance.
+
+Available commands:
+  prepare   Prepare test data (create collection, insert data, build index)
+  search    Run search performance test
+  insert    Run insert performance test
+  cleanup   Clean up test data`,
+	}
+
+	cmd.AddCommand(newBenchMilvusPrepareCmd())
+	cmd.AddCommand(newBenchMilvusSearchCmd())
+	cmd.AddCommand(newBenchMilvusInsertCmd())
+	cmd.AddCommand(newBenchMilvusCleanupCmd())
+
+	return cmd
+}
+
+// benchFlags holds common benchmark flags
+type benchFlags struct {
+	uri         string
+	username    string
+	password    string
+	dbName      string
+	collection  string
+	datasetName string
+	dimension   int
+	dataSize    int
+	threads     int
+	duration    int
+	batchSize   int
+	topK        int
+	indexType   string
+}
+
+func addBenchFlags(cmd *cobra.Command, flags *benchFlags) {
+	cmd.Flags().StringVar(&flags.uri, "uri", "localhost:19530", "Milvus server URI")
+	cmd.Flags().StringVar(&flags.username, "username", "", "Username for authentication")
+	cmd.Flags().StringVar(&flags.password, "password", "", "Password for authentication")
+	cmd.Flags().StringVar(&flags.dbName, "db", "", "Database name")
+	cmd.Flags().StringVar(&flags.collection, "collection", "benchmark_collection", "Collection name")
+	cmd.Flags().StringVar(&flags.datasetName, "dataset", "small", "Dataset name (small, medium, large, cohere-100k, cohere-1m, openai-50k)")
+	cmd.Flags().IntVar(&flags.dimension, "dimension", 0, "Vector dimension (overrides dataset default)")
+	cmd.Flags().IntVar(&flags.dataSize, "size", 0, "Data size (overrides dataset default)")
+	cmd.Flags().IntVar(&flags.threads, "threads", 10, "Number of concurrent threads")
+	cmd.Flags().IntVar(&flags.duration, "duration", 60, "Test duration in seconds")
+	cmd.Flags().IntVar(&flags.batchSize, "batch-size", 1000, "Batch size for insert")
+	cmd.Flags().IntVar(&flags.topK, "top-k", 10, "Number of results for search")
+	cmd.Flags().StringVar(&flags.indexType, "index-type", "IVF_FLAT", "Index type (FLAT, IVF_FLAT, HNSW)")
+}
+
+func buildVdbbenchArgs(subcmd string, flags *benchFlags) []string {
+	args := []string{"milvus", subcmd}
+	args = append(args, "--uri", flags.uri)
+	if flags.username != "" {
+		args = append(args, "--username", flags.username)
+	}
+	if flags.password != "" {
+		args = append(args, "--password", flags.password)
+	}
+	if flags.dbName != "" {
+		args = append(args, "--db", flags.dbName)
+	}
+	args = append(args, "--collection", flags.collection)
+	args = append(args, "--dataset", flags.datasetName)
+	if flags.dimension > 0 {
+		args = append(args, "--dimension", fmt.Sprintf("%d", flags.dimension))
+	}
+	if flags.dataSize > 0 {
+		args = append(args, "--size", fmt.Sprintf("%d", flags.dataSize))
+	}
+	args = append(args, "--threads", fmt.Sprintf("%d", flags.threads))
+	args = append(args, "--duration", fmt.Sprintf("%d", flags.duration))
+	args = append(args, "--batch-size", fmt.Sprintf("%d", flags.batchSize))
+	args = append(args, "--top-k", fmt.Sprintf("%d", flags.topK))
+	args = append(args, "--index-type", flags.indexType)
+	return args
+}
+
+func runGoVdbbench(args []string) error {
+	// Try to find go-vdbbench binary
+	vdbbenchPath := findVdbbenchBinary()
+	if vdbbenchPath == "" {
+		return fmt.Errorf("go-vdbbench not found. Please build it first:\n  cd tools/go-vdbbench && go build -o go-vdbbench ./cmd/go-vdbbench")
+	}
+
+	logger.Debug("Running: %s %v", vdbbenchPath, args)
+
+	cmd := exec.Command(vdbbenchPath, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+
+	return cmd.Run()
+}
+
+func findVdbbenchBinary() string {
+	// Check common locations
+	locations := []string{
+		"./go-vdbbench",
+		"./tools/go-vdbbench/go-vdbbench",
+		"go-vdbbench",
+	}
+
+	// Check if MIUP_HOME is set
+	if home := os.Getenv("MIUP_HOME"); home != "" {
+		locations = append([]string{
+			home + "/bin/go-vdbbench",
+			home + "/tools/go-vdbbench/go-vdbbench",
+		}, locations...)
+	}
+
+	// Get executable path for relative paths
+	if execPath, err := os.Executable(); err == nil {
+		execDir := strings.TrimSuffix(execPath, "/miup")
+		locations = append([]string{
+			execDir + "/go-vdbbench",
+			execDir + "/../tools/go-vdbbench/go-vdbbench",
+		}, locations...)
+	}
+
+	for _, loc := range locations {
+		if _, err := os.Stat(loc); err == nil {
+			return loc
+		}
+	}
+
+	// Try PATH
+	if path, err := exec.LookPath("go-vdbbench"); err == nil {
+		return path
+	}
+
+	return ""
+}
+
+func newBenchMilvusPrepareCmd() *cobra.Command {
+	var flags benchFlags
+
+	cmd := &cobra.Command{
+		Use:   "prepare",
+		Short: "Prepare test data",
+		Long: `Prepare test data for benchmarking.
+
+This command will:
+  1. Create a new collection
+  2. Insert test vectors
+  3. Build index
+  4. Load collection into memory
+
+Available datasets:
+  small       10,000 vectors (128 dim)
+  medium      100,000 vectors (128 dim)
+  large       1,000,000 vectors (128 dim)
+  cohere-100k 100,000 vectors (768 dim)
+  cohere-1m   1,000,000 vectors (768 dim)
+  openai-50k  50,000 vectors (1536 dim)
+  openai-500k 500,000 vectors (1536 dim)`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			vdbbenchArgs := buildVdbbenchArgs("prepare", &flags)
+			return runGoVdbbench(vdbbenchArgs)
+		},
+	}
+
+	addBenchFlags(cmd, &flags)
+	return cmd
+}
+
+func newBenchMilvusSearchCmd() *cobra.Command {
+	var flags benchFlags
+
+	cmd := &cobra.Command{
+		Use:   "search",
+		Short: "Run search performance test",
+		Long: `Run search performance test against Milvus.
+
+The test will execute concurrent vector similarity searches and measure:
+  - QPS (queries per second)
+  - Latency (avg, p50, p95, p99)
+  - Error rate
+
+Note: Requires data to be prepared first using 'miup bench milvus prepare'`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			vdbbenchArgs := buildVdbbenchArgs("search", &flags)
+			return runGoVdbbench(vdbbenchArgs)
+		},
+	}
+
+	addBenchFlags(cmd, &flags)
+	return cmd
+}
+
+func newBenchMilvusInsertCmd() *cobra.Command {
+	var flags benchFlags
+
+	cmd := &cobra.Command{
+		Use:   "insert",
+		Short: "Run insert performance test",
+		Long: `Run insert performance test against Milvus.
+
+The test will execute concurrent batch inserts and measure:
+  - Throughput (batches per second)
+  - Latency (avg, p50, p95, p99)
+  - Error rate`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			vdbbenchArgs := buildVdbbenchArgs("insert", &flags)
+			return runGoVdbbench(vdbbenchArgs)
+		},
+	}
+
+	addBenchFlags(cmd, &flags)
+	return cmd
+}
+
+func newBenchMilvusCleanupCmd() *cobra.Command {
+	var flags benchFlags
+
+	cmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Clean up test data",
+		Long:  `Remove the benchmark collection and all test data.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			vdbbenchArgs := buildVdbbenchArgs("cleanup", &flags)
+			return runGoVdbbench(vdbbenchArgs)
+		},
+	}
+
+	addBenchFlags(cmd, &flags)
+	return cmd
+}
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
