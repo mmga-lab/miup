@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 
@@ -57,6 +59,8 @@ func init() {
 	rootCmd.AddCommand(newListCmd())
 	rootCmd.AddCommand(newPlaygroundCmd())
 	rootCmd.AddCommand(newClusterCmd())
+	rootCmd.AddCommand(newCompletionCmd())
+	rootCmd.AddCommand(newMirrorCmd())
 }
 
 func newVersionCmd() *cobra.Command {
@@ -1034,6 +1038,339 @@ minio_servers:
     access_key: "minioadmin"
     secret_key: "minioadmin"
 `
+
+func newCompletionCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "completion [bash|zsh|fish|powershell]",
+		Short: "Generate shell completion scripts",
+		Long: `Generate shell completion scripts for miup.
+
+To load completions:
+
+Bash:
+  # Linux:
+  $ miup completion bash > /etc/bash_completion.d/miup
+  # macOS:
+  $ miup completion bash > $(brew --prefix)/etc/bash_completion.d/miup
+
+Zsh:
+  # If shell completion is not already enabled in your environment,
+  # you will need to enable it. You can execute the following once:
+  $ echo "autoload -U compinit; compinit" >> ~/.zshrc
+
+  # To load completions for each session, execute once:
+  # Linux:
+  $ miup completion zsh > "${fpath[1]}/_miup"
+  # macOS:
+  $ miup completion zsh > $(brew --prefix)/share/zsh/site-functions/_miup
+
+  # You will need to start a new shell for this setup to take effect.
+
+Fish:
+  $ miup completion fish > ~/.config/fish/completions/miup.fish
+
+PowerShell:
+  PS> miup completion powershell | Out-String | Invoke-Expression
+
+  # To load completions for every new session, run:
+  PS> miup completion powershell > miup.ps1
+  # and source this file from your PowerShell profile.
+`,
+		DisableFlagsInUseLine: true,
+		ValidArgs:             []string{"bash", "zsh", "fish", "powershell"},
+		Args:                  cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch args[0] {
+			case "bash":
+				return rootCmd.GenBashCompletion(os.Stdout)
+			case "zsh":
+				return rootCmd.GenZshCompletion(os.Stdout)
+			case "fish":
+				return rootCmd.GenFishCompletion(os.Stdout, true)
+			case "powershell":
+				return rootCmd.GenPowerShellCompletionWithDesc(os.Stdout)
+			default:
+				return fmt.Errorf("unknown shell: %s", args[0])
+			}
+		},
+	}
+	return cmd
+}
+
+func newMirrorCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "mirror",
+		Short: "Manage offline mirror for air-gapped environments",
+		Long: `Mirror provides commands for managing Docker images for offline/air-gapped deployments.
+
+This allows you to:
+  - Pull all required images for Milvus deployment
+  - Save images to a tar archive for transfer
+  - Load images from a tar archive
+  - Push images to a private registry
+
+Examples:
+  miup mirror pull                    Pull all required images
+  miup mirror save -o milvus.tar      Save images to tar file
+  miup mirror load -i milvus.tar      Load images from tar file
+  miup mirror push registry.local     Push images to private registry`,
+	}
+
+	cmd.AddCommand(newMirrorPullCmd())
+	cmd.AddCommand(newMirrorSaveCmd())
+	cmd.AddCommand(newMirrorLoadCmd())
+	cmd.AddCommand(newMirrorPushCmd())
+	cmd.AddCommand(newMirrorListCmd())
+
+	return cmd
+}
+
+func newMirrorPullCmd() *cobra.Command {
+	var (
+		milvusVersion string
+		all           bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "pull",
+		Short: "Pull Docker images for offline deployment",
+		Long: `Pull all required Docker images for Milvus deployment.
+
+This command pulls the following images:
+  - milvusdb/milvus (Milvus server)
+  - quay.io/coreos/etcd (etcd)
+  - minio/minio (MinIO object storage)
+  - prom/prometheus (optional, for monitoring)
+  - grafana/grafana (optional, for monitoring)`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			images := getMilvusImages(milvusVersion, all)
+
+			for _, img := range images {
+				logger.Info("Pulling image: %s", img)
+				if err := pullImage(img); err != nil {
+					return fmt.Errorf("failed to pull %s: %w", img, err)
+				}
+				logger.Success("Pulled: %s", img)
+			}
+
+			logger.Success("All images pulled successfully!")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
+	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+
+	return cmd
+}
+
+func newMirrorSaveCmd() *cobra.Command {
+	var (
+		output        string
+		milvusVersion string
+		all           bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "save",
+		Short: "Save Docker images to a tar archive",
+		Long: `Save all required Docker images to a tar archive for offline transfer.
+
+The tar archive can be transferred to air-gapped environments and loaded using:
+  miup mirror load -i <archive.tar>`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output == "" {
+				output = fmt.Sprintf("milvus-images-%s.tar", milvusVersion)
+			}
+
+			images := getMilvusImages(milvusVersion, all)
+
+			logger.Info("Saving %d images to %s...", len(images), output)
+			if err := saveImages(images, output); err != nil {
+				return fmt.Errorf("failed to save images: %w", err)
+			}
+
+			logger.Success("Images saved to: %s", output)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output tar file (default: milvus-images-<version>.tar)")
+	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
+	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+
+	return cmd
+}
+
+func newMirrorLoadCmd() *cobra.Command {
+	var input string
+
+	cmd := &cobra.Command{
+		Use:   "load",
+		Short: "Load Docker images from a tar archive",
+		Long: `Load Docker images from a tar archive created by 'miup mirror save'.
+
+This is typically used in air-gapped environments after transferring the tar archive.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if input == "" {
+				return fmt.Errorf("input file is required (-i)")
+			}
+
+			logger.Info("Loading images from %s...", input)
+			if err := loadImages(input); err != nil {
+				return fmt.Errorf("failed to load images: %w", err)
+			}
+
+			logger.Success("Images loaded successfully!")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&input, "input", "i", "", "Input tar file (required)")
+	cmd.MarkFlagRequired("input")
+
+	return cmd
+}
+
+func newMirrorPushCmd() *cobra.Command {
+	var (
+		milvusVersion string
+		all           bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "push <registry>",
+		Short: "Push images to a private registry",
+		Long: `Push all Milvus images to a private Docker registry.
+
+This re-tags and pushes images to your private registry for use in air-gapped environments.
+
+Examples:
+  miup mirror push registry.local:5000
+  miup mirror push harbor.example.com/milvus`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registry := args[0]
+			images := getMilvusImages(milvusVersion, all)
+
+			for _, img := range images {
+				newTag := retagImage(img, registry)
+				logger.Info("Pushing %s -> %s", img, newTag)
+
+				if err := tagAndPushImage(img, newTag); err != nil {
+					return fmt.Errorf("failed to push %s: %w", newTag, err)
+				}
+				logger.Success("Pushed: %s", newTag)
+			}
+
+			logger.Success("All images pushed to %s", registry)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
+	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+
+	return cmd
+}
+
+func newMirrorListCmd() *cobra.Command {
+	var (
+		milvusVersion string
+		all           bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List required Docker images",
+		Long:  `List all Docker images required for Milvus deployment.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			images := getMilvusImages(milvusVersion, all)
+
+			fmt.Println("Required images for Milvus deployment:")
+			for _, img := range images {
+				fmt.Printf("  - %s\n", img)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
+	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+
+	return cmd
+}
+
+// getMilvusImages returns the list of Docker images required for Milvus deployment
+func getMilvusImages(milvusVersion string, includeMonitoring bool) []string {
+	images := []string{
+		fmt.Sprintf("milvusdb/milvus:%s", milvusVersion),
+		"quay.io/coreos/etcd:v3.5.18",
+		"minio/minio:RELEASE.2023-03-20T20-16-18Z",
+	}
+
+	if includeMonitoring {
+		images = append(images,
+			"prom/prometheus:latest",
+			"grafana/grafana:latest",
+		)
+	}
+
+	return images
+}
+
+// pullImage pulls a Docker image
+func pullImage(image string) error {
+	cmd := exec.Command("docker", "pull", image)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// saveImages saves Docker images to a tar file
+func saveImages(images []string, output string) error {
+	args := append([]string{"save", "-o", output}, images...)
+	cmd := exec.Command("docker", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// loadImages loads Docker images from a tar file
+func loadImages(input string) error {
+	cmd := exec.Command("docker", "load", "-i", input)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// retagImage generates a new tag for pushing to a private registry
+func retagImage(image, registry string) string {
+	// Extract image name without registry
+	parts := strings.Split(image, "/")
+	var imageName string
+	if len(parts) == 1 {
+		imageName = parts[0]
+	} else {
+		imageName = strings.Join(parts[len(parts)-2:], "/")
+	}
+	return fmt.Sprintf("%s/%s", registry, imageName)
+}
+
+// tagAndPushImage tags and pushes an image to a registry
+func tagAndPushImage(source, target string) error {
+	// Tag the image
+	tagCmd := exec.Command("docker", "tag", source, target)
+	if err := tagCmd.Run(); err != nil {
+		return fmt.Errorf("failed to tag: %w", err)
+	}
+
+	// Push the image
+	pushCmd := exec.Command("docker", "push", target)
+	pushCmd.Stdout = os.Stdout
+	pushCmd.Stderr = os.Stderr
+	return pushCmd.Run()
+}
 
 const kubernetesTLSTemplate = `# MiUp Kubernetes Topology - Standalone Mode with TLS
 # Deploy with: miup instance deploy <instance-name> <this-file> --kubernetes
