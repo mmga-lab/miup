@@ -24,4 +24,23 @@ type Executor interface {
 
 	// Logs retrieves logs from a service
 	Logs(ctx context.Context, service string, tail int) (string, error)
+
+	// Scale scales a component to the specified number of replicas
+	Scale(ctx context.Context, component string, replicas int) error
+
+	// GetReplicas returns the current replica count for each component
+	GetReplicas(ctx context.Context) (map[string]int, error)
+}
+
+// ComponentNames defines valid component names for scaling
+var ComponentNames = []string{
+	"proxy",
+	"querynode",
+	"datanode",
+	"indexnode",
+	"rootcoord",
+	"querycoord",
+	"datacoord",
+	"indexcoord",
+	"standalone",
 }

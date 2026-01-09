@@ -407,3 +407,25 @@ func tlsModeDescription(mode int) string {
 		return "unknown"
 	}
 }
+
+// Scale is not supported for local deployments (standalone mode only)
+func (e *LocalExecutor) Scale(ctx context.Context, component string, replicas int) error {
+	return fmt.Errorf("scaling is not supported for local deployments. Local mode only supports standalone Milvus. Use Kubernetes deployment for scaling")
+}
+
+// GetReplicas returns the current replica count for local deployment
+func (e *LocalExecutor) GetReplicas(ctx context.Context) (map[string]int, error) {
+	// Local deployment is always standalone with 1 replica
+	running, err := e.IsRunning(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	replicas := make(map[string]int)
+	if running {
+		replicas["standalone"] = 1
+	} else {
+		replicas["standalone"] = 0
+	}
+	return replicas, nil
+}

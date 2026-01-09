@@ -516,6 +516,8 @@ Examples:
   miup instance display prod                           Show instance details
   miup instance start prod                             Start an instance
   miup instance stop prod                              Stop an instance
+  miup instance scale prod --component querynode --replicas 3   Scale a component
+  miup instance replicas prod                          Show current replicas
   miup instance destroy prod                           Destroy an instance`,
 	}
 
@@ -524,6 +526,8 @@ Examples:
 	cmd.AddCommand(newInstanceDisplayCmd())
 	cmd.AddCommand(newInstanceStartCmd())
 	cmd.AddCommand(newInstanceStopCmd())
+	cmd.AddCommand(newInstanceScaleCmd())
+	cmd.AddCommand(newInstanceReplicasCmd())
 	cmd.AddCommand(newInstanceDestroyCmd())
 	cmd.AddCommand(newInstanceLogsCmd())
 	cmd.AddCommand(newInstanceTemplateCmd())
@@ -750,6 +754,113 @@ func newInstanceStopCmd() *cobra.Command {
 
 			mgr := manager.NewManager(profile)
 			return mgr.Stop(ctx, instanceName)
+		},
+	}
+	return cmd
+}
+
+func newInstanceScaleCmd() *cobra.Command {
+	var (
+		component string
+		replicas  int
+	)
+
+	cmd := &cobra.Command{
+		Use:   "scale <instance-name>",
+		Short: "Scale a component in the instance",
+		Long: `Scale a Milvus component to the specified number of replicas.
+
+This command only works with Kubernetes deployments (distributed mode).
+Local deployments (standalone mode) do not support scaling.
+
+Available components for distributed mode:
+  proxy       Milvus proxy (API gateway)
+  querynode   Query node (handles search requests)
+  datanode    Data node (handles data writes)
+  indexnode   Index node (builds indexes)
+  rootcoord   Root coordinator
+  querycoord  Query coordinator
+  datacoord   Data coordinator
+  indexcoord  Index coordinator
+
+Examples:
+  miup instance scale prod --component querynode --replicas 5
+  miup instance scale prod -c datanode -r 3`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+
+			if component == "" {
+				return fmt.Errorf("--component is required")
+			}
+			if replicas < 0 {
+				return fmt.Errorf("--replicas must be >= 0")
+			}
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			mgr := manager.NewManager(profile)
+			return mgr.Scale(ctx, instanceName, component, replicas)
+		},
+	}
+
+	cmd.Flags().StringVarP(&component, "component", "c", "", "Component to scale (required)")
+	cmd.Flags().IntVarP(&replicas, "replicas", "r", 1, "Number of replicas")
+	cmd.MarkFlagRequired("component")
+
+	return cmd
+}
+
+func newInstanceReplicasCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "replicas <instance-name>",
+		Short: "Show current replica counts",
+		Long: `Show the current replica count for each component in the instance.
+
+For Kubernetes deployments, this shows actual running pod counts.
+For local deployments, this shows standalone replica count (always 1 when running).`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx := context.Background()
+			mgr := manager.NewManager(profile)
+
+			replicas, err := mgr.GetReplicas(ctx, instanceName)
+			if err != nil {
+				return err
+			}
+
+			fmt.Printf("Instance: %s\n", color.CyanString(instanceName))
+			fmt.Println("Replicas:")
+
+			// Order components for consistent output
+			components := []string{"standalone", "proxy", "rootcoord", "querycoord", "datacoord", "indexcoord", "querynode", "datanode", "indexnode"}
+			for _, comp := range components {
+				if count, ok := replicas[comp]; ok {
+					fmt.Printf("  %-12s %d\n", comp+":", count)
+				}
+			}
+
+			return nil
 		},
 	}
 	return cmd

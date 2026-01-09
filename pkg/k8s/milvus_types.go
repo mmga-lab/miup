@@ -233,10 +233,13 @@ type MilvusStatus struct {
 
 // MilvusReplicas shows replica counts for components
 type MilvusReplicas struct {
-	Proxy     int32 `json:"proxy,omitempty"`
-	RootCoord int32 `json:"rootCoord,omitempty"`
-	DataCoord int32 `json:"dataCoord,omitempty"`
-	DataNode  int32 `json:"dataNode,omitempty"`
-	QueryNode int32 `json:"queryNode,omitempty"`
-	IndexNode int32 `json:"indexNode,omitempty"`
+	Standalone int32 `json:"standalone,omitempty"`
+	Proxy      int32 `json:"proxy,omitempty"`
+	RootCoord  int32 `json:"rootCoord,omitempty"`
+	QueryCoord int32 `json:"queryCoord,omitempty"`
+	DataCoord  int32 `json:"dataCoord,omitempty"`
+	IndexCoord int32 `json:"indexCoord,omitempty"`
+	QueryNode  int32 `json:"queryNode,omitempty"`
+	DataNode   int32 `json:"dataNode,omitempty"`
+	IndexNode  int32 `json:"indexNode,omitempty"`
 }

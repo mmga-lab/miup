@@ -357,6 +357,82 @@ func (m *Manager) Logs(ctx context.Context, name string, service string, tail in
 	return exec.Logs(ctx, service, tail)
 }
 
+// Scale scales a component in the cluster
+func (m *Manager) Scale(ctx context.Context, name string, component string, replicas int) error {
+	if !m.Exists(name) {
+		return fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return err
+	}
+
+	exec, err := m.createExecutor(name, specification, DeployOptions{
+		Backend:       meta.Backend,
+		MilvusVersion: meta.MilvusVersion,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Update status to scaling
+	oldStatus := meta.Status
+	meta.Status = spec.StatusScaling
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	logger.Info("Scaling %s to %d replicas in cluster '%s'...", component, replicas, name)
+	if err := exec.Scale(ctx, component, replicas); err != nil {
+		// Restore old status on failure
+		meta.Status = oldStatus
+		spec.SaveMeta(meta, m.MetaPath(name))
+		return fmt.Errorf("failed to scale: %w", err)
+	}
+
+	// Update status back to running
+	meta.Status = spec.StatusRunning
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	logger.Success("Scaled %s to %d replicas!", component, replicas)
+	return nil
+}
+
+// GetReplicas returns the current replica count for each component
+func (m *Manager) GetReplicas(ctx context.Context, name string) (map[string]int, error) {
+	if !m.Exists(name) {
+		return nil, fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return nil, err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return nil, err
+	}
+
+	exec, err := m.createExecutor(name, specification, DeployOptions{
+		Backend:       meta.Backend,
+		MilvusVersion: meta.MilvusVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return exec.GetReplicas(ctx)
+}
+
 // Exists checks if a cluster exists
 func (m *Manager) Exists(name string) bool {
 	_, err := os.Stat(m.ClusterDir(name))

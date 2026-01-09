@@ -1,6 +1,6 @@
 # Binaries
 bin/
-miup
+/miup
 *.exe
 *.exe~
 *.dll
