@@ -1,0 +1,167 @@
+# MiUp Cluster Topology Configuration
+# Deploy a Milvus cluster using: miup cluster deploy <cluster-name> <this-file>
+
+# Global settings apply to all servers
+global:
+  # User to run Milvus services (for bare-metal deployment)
+  user: "milvus"
+
+  # SSH port for connecting to servers (for bare-metal deployment)
+  ssh_port: 22
+
+  # Base directories
+  deploy_dir: "/opt/milvus"
+  data_dir: "/data/milvus"
+  log_dir: "/var/log/milvus"
+
+  # Kubernetes settings (only used when --kubernetes flag is set)
+  namespace: "milvus"
+  storage_class: "standard"
+
+  # TLS settings (optional)
+  tls_enabled: false
+  # tls_ca: "/path/to/ca.crt"
+  # tls_cert: "/path/to/server.crt"
+  # tls_key: "/path/to/server.key"
+
+# Server configuration overrides
+server_configs:
+  milvus:
+    common:
+      gracefulTime: 5000
+      gracefulStopTimeout: 30
+    proxy:
+      maxTaskNum: 1024
+      timeTickInterval: 200
+    queryNode:
+      gracefulStopTimeout: 30
+      stats:
+        publishInterval: 1000
+    dataNode:
+      segment:
+        insertBufSize: 16777216
+    indexNode:
+      scheduler:
+        buildParallel: 1
+
+# Milvus servers configuration
+milvus_servers:
+  - host: 10.0.0.1
+    port: 19530
+
+    # Component configuration
+    components:
+      # Proxy - handles client requests
+      proxy:
+        replicas: 2
+        resources:
+          cpu: "1"
+          memory: "2Gi"
+
+      # Coordination services
+      rootCoord:
+        replicas: 1
+        resources:
+          cpu: "0.5"
+          memory: "1Gi"
+      queryCoord:
+        replicas: 1
+        resources:
+          cpu: "0.5"
+          memory: "1Gi"
+      dataCoord:
+        replicas: 1
+        resources:
+          cpu: "0.5"
+          memory: "1Gi"
+      indexCoord:
+        replicas: 1
+        resources:
+          cpu: "0.5"
+          memory: "1Gi"
+
+      # Worker nodes
+      queryNode:
+        replicas: 3
+        resources:
+          cpu: "4"
+          memory: "16Gi"
+      dataNode:
+        replicas: 2
+        resources:
+          cpu: "2"
+          memory: "8Gi"
+      indexNode:
+        replicas: 2
+        resources:
+          cpu: "4"
+          memory: "8Gi"
+
+# Etcd servers (distributed key-value store)
+etcd_servers:
+  - host: 10.0.0.10
+    client_port: 2379
+    peer_port: 2380
+    data_dir: "/data/etcd"
+  - host: 10.0.0.11
+    client_port: 2379
+    peer_port: 2380
+    data_dir: "/data/etcd"
+  - host: 10.0.0.12
+    client_port: 2379
+    peer_port: 2380
+    data_dir: "/data/etcd"
+
+# MinIO servers (object storage)
+minio_servers:
+  - host: 10.0.0.20
+    port: 9000
+    console_port: 9001
+    access_key: "minioadmin"
+    secret_key: "minioadmin"
+    bucket: "milvus-bucket"
+    data_dir: "/data/minio"
+
+# Message queue (choose one: pulsar or kafka)
+# Pulsar servers (optional - if not set, uses RocksDB for standalone)
+# pulsar_servers:
+#   - host: 10.0.0.30
+#     port: 6650
+#     http_port: 80
+
+# Kafka servers (alternative to Pulsar)
+# kafka_servers:
+#   - host: 10.0.0.30
+#     port: 9092
+
+# Monitoring servers (optional)
+monitoring_servers:
+  - host: 10.0.0.40
+    prometheus_port: 9090
+    alertmanager_port: 9093
+    data_dir: "/data/prometheus"
+    retention: "15d"
+
+    # Alert rules
+    alert_rules:
+      - name: "milvus-alerts"
+        rules:
+          - alert: MilvusProxyDown
+            expr: up{job="milvus-proxy"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Milvus Proxy is down"
+
+# Grafana servers (optional)
+grafana_servers:
+  - host: 10.0.0.40
+    port: 3000
+    admin_password: "admin"
+
+    # Dashboards to import
+    dashboards:
+      - milvus-overview
+      - milvus-query
+      - milvus-indexing
