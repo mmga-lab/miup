@@ -2,6 +2,8 @@ package dataset
 
 import (
 	"math/rand"
+	"sync/atomic"
+	"time"
 )
 
 // Dataset represents a test dataset
@@ -27,16 +29,20 @@ type RandomDataset struct {
 	name      string
 	dimension int
 	size      int
-	rng       *rand.Rand
+	seedBase  int64
+	seedInc   atomic.Int64
 }
 
 // NewRandomDataset creates a new random dataset
 func NewRandomDataset(name string, dimension, size int, seed int64) *RandomDataset {
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
 	return &RandomDataset{
 		name:      name,
 		dimension: dimension,
 		size:      size,
-		rng:       rand.New(rand.NewSource(seed)),
+		seedBase:  seed,
 	}
 }
 
@@ -55,11 +61,15 @@ func (d *RandomDataset) Size() int {
 	return d.size
 }
 
-// GenerateVectors generates n random vectors
+// GenerateVectors generates n random vectors (thread-safe)
 func (d *RandomDataset) GenerateVectors(n int) [][]float32 {
+	// Create a local rand instance with unique seed for thread safety
+	localSeed := d.seedBase + d.seedInc.Add(1)
+	rng := rand.New(rand.NewSource(localSeed))
+
 	vectors := make([][]float32, n)
 	for i := 0; i < n; i++ {
-		vectors[i] = d.generateVector()
+		vectors[i] = generateVectorWithRng(rng, d.dimension)
 	}
 	return vectors
 }
@@ -69,10 +79,10 @@ func (d *RandomDataset) GenerateQueryVectors(n int) [][]float32 {
 	return d.GenerateVectors(n)
 }
 
-func (d *RandomDataset) generateVector() []float32 {
-	vec := make([]float32, d.dimension)
+func generateVectorWithRng(rng *rand.Rand, dimension int) []float32 {
+	vec := make([]float32, dimension)
 	for i := range vec {
-		vec[i] = d.rng.Float32()
+		vec[i] = rng.Float32()
 	}
 	return normalizeVector(vec)
 }

@@ -192,6 +192,17 @@ func (w *Workload) RunInsert(ctx context.Context, progressFn func(ops int64, ela
 	cfg := w.config
 	ds := cfg.Dataset
 
+	// Ensure collection exists before starting insert benchmark
+	exists, err := w.db.HasCollection(ctx, cfg.Collection)
+	if err != nil {
+		// Can't check collection, proceed anyway and let insert fail
+	} else if !exists {
+		// Create collection for insert benchmark
+		if err := w.db.CreateCollection(ctx, cfg.Collection, ds.Dimension(), "L2"); err != nil {
+			// Collection creation failed, proceed anyway
+		}
+	}
+
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(ctx, cfg.Duration)
 	defer cancel()

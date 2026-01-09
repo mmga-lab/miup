@@ -70,8 +70,20 @@ func (c *Collector) Calculate() *Result {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	duration := c.endTime.Sub(c.startTime)
+
 	if len(c.latencies) == 0 {
-		return &Result{}
+		// Return result with errors even if no successful ops
+		totalAttempts := c.errors
+		errorRate := float64(0)
+		if totalAttempts > 0 {
+			errorRate = 100.0
+		}
+		return &Result{
+			Duration:  duration,
+			Errors:    c.errors,
+			ErrorRate: errorRate,
+		}
 	}
 
 	// Sort latencies for percentile calculation
@@ -88,7 +100,6 @@ func (c *Collector) Calculate() *Result {
 	}
 
 	n := len(sorted)
-	duration := c.endTime.Sub(c.startTime)
 	totalOps := int64(n)
 
 	result := &Result{
