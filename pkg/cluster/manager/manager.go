@@ -544,6 +544,67 @@ func (m *Manager) GetVersion(ctx context.Context, name string) (string, error) {
 	return exec.GetVersion(ctx)
 }
 
+// GetConfig returns the current Milvus configuration for the cluster
+func (m *Manager) GetConfig(ctx context.Context, name string) (map[string]interface{}, error) {
+	if !m.Exists(name) {
+		return nil, fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return nil, err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return nil, err
+	}
+
+	exec, err := m.createExecutor(name, specification, DeployOptions{
+		Backend:       meta.Backend,
+		MilvusVersion: meta.MilvusVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return exec.GetConfig(ctx)
+}
+
+// SetConfig updates the Milvus configuration for the cluster
+func (m *Manager) SetConfig(ctx context.Context, name string, config map[string]interface{}) error {
+	if !m.Exists(name) {
+		return fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return err
+	}
+
+	exec, err := m.createExecutor(name, specification, DeployOptions{
+		Backend:       meta.Backend,
+		MilvusVersion: meta.MilvusVersion,
+	})
+	if err != nil {
+		return err
+	}
+
+	logger.Info("Updating configuration for cluster '%s'...", name)
+
+	if err := exec.SetConfig(ctx, config); err != nil {
+		return fmt.Errorf("failed to set config: %w", err)
+	}
+
+	logger.Success("Configuration updated for cluster '%s'!", name)
+	return nil
+}
+
 // Exists checks if a cluster exists
 func (m *Manager) Exists(name string) bool {
 	_, err := os.Stat(m.ClusterDir(name))

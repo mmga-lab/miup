@@ -36,6 +36,12 @@ type Executor interface {
 
 	// GetVersion returns the current Milvus version
 	GetVersion(ctx context.Context) (string, error)
+
+	// GetConfig returns the current Milvus configuration
+	GetConfig(ctx context.Context) (map[string]interface{}, error)
+
+	// SetConfig updates the Milvus configuration
+	SetConfig(ctx context.Context, config map[string]interface{}) error
 }
 
 // ScaleOptions defines options for scaling a component

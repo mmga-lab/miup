@@ -695,3 +695,58 @@ func (e *KubernetesExecutor) GetVersion(ctx context.Context) (string, error) {
 
 	return parts[len(parts)-1], nil
 }
+
+// GetConfig returns the current Milvus configuration from the CRD
+func (e *KubernetesExecutor) GetConfig(ctx context.Context) (map[string]interface{}, error) {
+	milvus, err := e.client.GetMilvus(ctx, e.clusterName, e.namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get Milvus cluster: %w", err)
+	}
+
+	if milvus.Spec.Config == nil {
+		return make(map[string]interface{}), nil
+	}
+
+	return milvus.Spec.Config, nil
+}
+
+// SetConfig updates the Milvus configuration in the CRD
+func (e *KubernetesExecutor) SetConfig(ctx context.Context, config map[string]interface{}) error {
+	milvus, err := e.client.GetMilvus(ctx, e.clusterName, e.namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get Milvus cluster: %w", err)
+	}
+
+	// Merge new config with existing config
+	if milvus.Spec.Config == nil {
+		milvus.Spec.Config = make(map[string]interface{})
+	}
+
+	// Deep merge the configuration
+	mergeConfig(milvus.Spec.Config, config)
+
+	// Update the Milvus resource
+	if err := e.client.UpdateMilvus(ctx, milvus); err != nil {
+		return fmt.Errorf("failed to update Milvus cluster: %w", err)
+	}
+
+	// Wait for the cluster to be healthy after config change
+	return e.waitForReady(ctx, 10*time.Minute)
+}
+
+// mergeConfig deep merges src into dst
+func mergeConfig(dst, src map[string]interface{}) {
+	for key, srcVal := range src {
+		if dstVal, exists := dst[key]; exists {
+			// If both are maps, merge recursively
+			srcMap, srcIsMap := srcVal.(map[string]interface{})
+			dstMap, dstIsMap := dstVal.(map[string]interface{})
+			if srcIsMap && dstIsMap {
+				mergeConfig(dstMap, srcMap)
+				continue
+			}
+		}
+		// Otherwise, overwrite
+		dst[key] = srcVal
+	}
+}

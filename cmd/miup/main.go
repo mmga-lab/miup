@@ -19,6 +19,7 @@ import (
 	"github.com/zilliztech/miup/pkg/logger"
 	"github.com/zilliztech/miup/pkg/playground"
 	"github.com/zilliztech/miup/pkg/version"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -520,6 +521,8 @@ Examples:
   miup instance scale prod --component querynode --replicas 3   Scale a component
   miup instance replicas prod                          Show current replicas
   miup instance upgrade prod v2.5.5                    Upgrade to a new version
+  miup instance config show prod                       Show configuration
+  miup instance config set prod key=value              Set configuration
   miup instance destroy prod                           Destroy an instance`,
 	}
 
@@ -531,6 +534,7 @@ Examples:
 	cmd.AddCommand(newInstanceScaleCmd())
 	cmd.AddCommand(newInstanceReplicasCmd())
 	cmd.AddCommand(newInstanceUpgradeCmd())
+	cmd.AddCommand(newInstanceConfigCmd())
 	cmd.AddCommand(newInstanceDestroyCmd())
 	cmd.AddCommand(newInstanceLogsCmd())
 	cmd.AddCommand(newInstanceTemplateCmd())
@@ -1861,6 +1865,282 @@ func newBenchMilvusCleanupCmd() *cobra.Command {
 	}
 
 	addBenchFlags(cmd, &flags)
+	return cmd
+}
+
+func newInstanceConfigCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "config",
+		Short: "Manage instance configuration",
+		Long: `Manage Milvus configuration for an instance.
+
+For Kubernetes deployments, configuration is stored in the Milvus CRD spec.config field.
+For local deployments, configuration is stored in the user.yaml file.
+
+Subcommands:
+  show    Show current configuration
+  set     Set configuration values
+  import  Import configuration from a YAML file
+  export  Export configuration to stdout (YAML format)
+
+Examples:
+  miup instance config show prod
+  miup instance config set prod common.security.tlsMode=1
+  miup instance config import prod config.yaml
+  miup instance config export prod > config.yaml`,
+	}
+
+	cmd.AddCommand(newConfigShowCmd())
+	cmd.AddCommand(newConfigSetCmd())
+	cmd.AddCommand(newConfigImportCmd())
+	cmd.AddCommand(newConfigExportCmd())
+
+	return cmd
+}
+
+func newConfigShowCmd() *cobra.Command {
+	var key string
+
+	cmd := &cobra.Command{
+		Use:   "show <instance-name>",
+		Short: "Show current configuration",
+		Long: `Show the current Milvus configuration for an instance.
+
+Use --key to show a specific configuration section.
+
+Examples:
+  miup instance config show prod
+  miup instance config show prod --key common
+  miup instance config show prod --key proxy`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx := context.Background()
+			mgr := manager.NewManager(profile)
+
+			config, err := mgr.GetConfig(ctx, instanceName)
+			if err != nil {
+				return err
+			}
+
+			// Filter by key if specified
+			if key != "" {
+				if val, ok := config[key]; ok {
+					config = map[string]interface{}{key: val}
+				} else {
+					return fmt.Errorf("configuration key '%s' not found", key)
+				}
+			}
+
+			if len(config) == 0 {
+				fmt.Println("No configuration set.")
+				return nil
+			}
+
+			// Output as YAML
+			data, err := yaml.Marshal(config)
+			if err != nil {
+				return fmt.Errorf("failed to format config: %w", err)
+			}
+
+			fmt.Printf("Instance: %s\n", color.CyanString(instanceName))
+			fmt.Println("Configuration:")
+			fmt.Println(string(data))
+
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&key, "key", "k", "", "Show only the specified configuration key")
+
+	return cmd
+}
+
+func newConfigSetCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "set <instance-name> <key=value>...",
+		Short: "Set configuration values",
+		Long: `Set one or more configuration values for an instance.
+
+Configuration keys use dot notation for nested values.
+After setting, the instance will be restarted to apply changes.
+
+Examples:
+  miup instance config set prod common.security.tlsMode=1
+  miup instance config set prod proxy.maxTaskNum=1024
+  miup instance config set prod queryNode.gracefulTime=5000`,
+		Args: cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+			keyValues := args[1:]
+
+			// Parse key=value pairs into nested config
+			config := make(map[string]interface{})
+			for _, kv := range keyValues {
+				parts := strings.SplitN(kv, "=", 2)
+				if len(parts) != 2 {
+					return fmt.Errorf("invalid format '%s': expected key=value", kv)
+				}
+				key, value := parts[0], parts[1]
+
+				// Parse the value (try number, bool, then string)
+				var parsedValue interface{} = value
+				if v, err := fmt.Sscanf(value, "%d", new(int)); err == nil && v == 1 {
+					var intVal int
+					fmt.Sscanf(value, "%d", &intVal)
+					parsedValue = intVal
+				} else if value == "true" {
+					parsedValue = true
+				} else if value == "false" {
+					parsedValue = false
+				}
+
+				// Build nested structure from dot notation
+				setNestedValue(config, key, parsedValue)
+			}
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			mgr := manager.NewManager(profile)
+			return mgr.SetConfig(ctx, instanceName, config)
+		},
+	}
+
+	return cmd
+}
+
+// setNestedValue sets a value in a nested map using dot notation key
+func setNestedValue(m map[string]interface{}, key string, value interface{}) {
+	parts := strings.Split(key, ".")
+	current := m
+
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			current[part] = value
+		} else {
+			if _, ok := current[part]; !ok {
+				current[part] = make(map[string]interface{})
+			}
+			current = current[part].(map[string]interface{})
+		}
+	}
+}
+
+func newConfigImportCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "import <instance-name> <config-file>",
+		Short: "Import configuration from a YAML file",
+		Long: `Import Milvus configuration from a YAML file.
+
+The configuration will be merged with existing configuration.
+After importing, the instance will be restarted to apply changes.
+
+Examples:
+  miup instance config import prod config.yaml
+  miup instance config import prod /path/to/milvus.yaml`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+			configFile := args[1]
+
+			// Read config file
+			data, err := os.ReadFile(configFile)
+			if err != nil {
+				return fmt.Errorf("failed to read config file: %w", err)
+			}
+
+			var config map[string]interface{}
+			if err := yaml.Unmarshal(data, &config); err != nil {
+				return fmt.Errorf("failed to parse config file: %w", err)
+			}
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			mgr := manager.NewManager(profile)
+			return mgr.SetConfig(ctx, instanceName, config)
+		},
+	}
+
+	return cmd
+}
+
+func newConfigExportCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "export <instance-name>",
+		Short: "Export configuration to stdout",
+		Long: `Export the current Milvus configuration to stdout in YAML format.
+
+You can redirect the output to a file for backup or modification.
+
+Examples:
+  miup instance config export prod
+  miup instance config export prod > config.yaml`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx := context.Background()
+			mgr := manager.NewManager(profile)
+
+			config, err := mgr.GetConfig(ctx, instanceName)
+			if err != nil {
+				return err
+			}
+
+			if len(config) == 0 {
+				fmt.Println("# No configuration set")
+				return nil
+			}
+
+			// Output as YAML
+			data, err := yaml.Marshal(config)
+			if err != nil {
+				return fmt.Errorf("failed to format config: %w", err)
+			}
+
+			fmt.Print(string(data))
+
+			return nil
+		},
+	}
+
 	return cmd
 }
 
