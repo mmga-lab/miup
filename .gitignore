@@ -33,3 +33,6 @@ Thumbs.db
 
 # Debug
 __debug_bin
+
+# Claude Code
+CLAUDE.md
