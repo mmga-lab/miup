@@ -1330,6 +1330,7 @@ func newMirrorPullCmd() *cobra.Command {
 	var (
 		milvusVersion string
 		all           bool
+		registry      string
 	)
 
 	cmd := &cobra.Command{
@@ -1342,9 +1343,13 @@ This command pulls the following images:
   - quay.io/coreos/etcd (etcd)
   - minio/minio (MinIO object storage)
   - prom/prometheus (optional, for monitoring)
-  - grafana/grafana (optional, for monitoring)`,
+  - grafana/grafana (optional, for monitoring)
+
+Examples:
+  miup mirror pull                                    Pull from public registries
+  miup mirror pull --registry harbor.milvus.io       Pull from internal Harbor`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			images := getMilvusImages(milvusVersion, all)
+			images := getMilvusImages(milvusVersion, all, registry)
 
 			for _, img := range images {
 				logger.Info("Pulling image: %s", img)
@@ -1361,6 +1366,7 @@ This command pulls the following images:
 
 	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
 	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+	cmd.Flags().StringVar(&registry, "registry", "", "Private registry address (e.g., harbor.milvus.io)")
 
 	return cmd
 }
@@ -1370,6 +1376,7 @@ func newMirrorSaveCmd() *cobra.Command {
 		output        string
 		milvusVersion string
 		all           bool
+		registry      string
 	)
 
 	cmd := &cobra.Command{
@@ -1378,13 +1385,17 @@ func newMirrorSaveCmd() *cobra.Command {
 		Long: `Save all required Docker images to a tar archive for offline transfer.
 
 The tar archive can be transferred to air-gapped environments and loaded using:
-  miup mirror load -i <archive.tar>`,
+  miup mirror load -i <archive.tar>
+
+Examples:
+  miup mirror save -o milvus.tar                           Save from public registries
+  miup mirror save -o milvus.tar --registry harbor.milvus.io  Save from internal Harbor`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if output == "" {
 				output = fmt.Sprintf("milvus-images-%s.tar", milvusVersion)
 			}
 
-			images := getMilvusImages(milvusVersion, all)
+			images := getMilvusImages(milvusVersion, all, registry)
 
 			logger.Info("Saving %d images to %s...", len(images), output)
 			if err := saveImages(images, output); err != nil {
@@ -1399,6 +1410,7 @@ The tar archive can be transferred to air-gapped environments and loaded using:
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output tar file (default: milvus-images-<version>.tar)")
 	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
 	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+	cmd.Flags().StringVar(&registry, "registry", "", "Private registry address (e.g., harbor.milvus.io)")
 
 	return cmd
 }
@@ -1435,8 +1447,9 @@ This is typically used in air-gapped environments after transferring the tar arc
 
 func newMirrorPushCmd() *cobra.Command {
 	var (
-		milvusVersion string
-		all           bool
+		milvusVersion  string
+		all            bool
+		sourceRegistry string
 	)
 
 	cmd := &cobra.Command{
@@ -1448,14 +1461,15 @@ This re-tags and pushes images to your private registry for use in air-gapped en
 
 Examples:
   miup mirror push registry.local:5000
-  miup mirror push harbor.example.com/milvus`,
+  miup mirror push harbor.example.com/milvus
+  miup mirror push registry.local:5000 --source-registry harbor.milvus.io`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			registry := args[0]
-			images := getMilvusImages(milvusVersion, all)
+			targetRegistry := args[0]
+			images := getMilvusImages(milvusVersion, all, sourceRegistry)
 
 			for _, img := range images {
-				newTag := retagImage(img, registry)
+				newTag := retagImage(img, targetRegistry)
 				logger.Info("Pushing %s -> %s", img, newTag)
 
 				if err := tagAndPushImage(img, newTag); err != nil {
@@ -1464,13 +1478,14 @@ Examples:
 				logger.Success("Pushed: %s", newTag)
 			}
 
-			logger.Success("All images pushed to %s", registry)
+			logger.Success("All images pushed to %s", targetRegistry)
 			return nil
 		},
 	}
 
 	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
 	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+	cmd.Flags().StringVar(&sourceRegistry, "source-registry", "", "Source registry to pull images from (e.g., harbor.milvus.io)")
 
 	return cmd
 }
@@ -1479,14 +1494,19 @@ func newMirrorListCmd() *cobra.Command {
 	var (
 		milvusVersion string
 		all           bool
+		registry      string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List required Docker images",
-		Long:  `List all Docker images required for Milvus deployment.`,
+		Long: `List all Docker images required for Milvus deployment.
+
+Examples:
+  miup mirror list                               List images from public registries
+  miup mirror list --registry harbor.milvus.io  List images from internal Harbor`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			images := getMilvusImages(milvusVersion, all)
+			images := getMilvusImages(milvusVersion, all, registry)
 
 			fmt.Println("Required images for Milvus deployment:")
 			for _, img := range images {
@@ -1498,23 +1518,43 @@ func newMirrorListCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version")
 	cmd.Flags().BoolVar(&all, "all", false, "Include monitoring images (Prometheus, Grafana)")
+	cmd.Flags().StringVar(&registry, "registry", "", "Private registry address (e.g., harbor.milvus.io)")
 
 	return cmd
 }
 
 // getMilvusImages returns the list of Docker images required for Milvus deployment
-func getMilvusImages(milvusVersion string, includeMonitoring bool) []string {
-	images := []string{
-		fmt.Sprintf("milvusdb/milvus:%s", milvusVersion),
-		"quay.io/coreos/etcd:v3.5.18",
-		"minio/minio:RELEASE.2023-03-20T20-16-18Z",
-	}
+// If registry is provided, images will be prefixed with the registry address
+func getMilvusImages(milvusVersion string, includeMonitoring bool, registry string) []string {
+	var images []string
 
-	if includeMonitoring {
-		images = append(images,
-			"prom/prometheus:latest",
-			"grafana/grafana:latest",
-		)
+	if registry != "" {
+		// Use internal registry (e.g., harbor.milvus.io)
+		// Format: registry/project/image:tag
+		images = []string{
+			fmt.Sprintf("%s/milvus/milvus:%s", registry, milvusVersion),
+			fmt.Sprintf("%s/milvus-ci/etcd:3.5.18-r0", registry),
+			fmt.Sprintf("%s/milvus-ci/minio:RELEASE.2023-03-20T20-16-18Z", registry),
+		}
+		if includeMonitoring {
+			images = append(images,
+				fmt.Sprintf("%s/milvus-ci/prometheus:latest", registry),
+				fmt.Sprintf("%s/milvus-ci/grafana:latest", registry),
+			)
+		}
+	} else {
+		// Use public registries
+		images = []string{
+			fmt.Sprintf("milvusdb/milvus:%s", milvusVersion),
+			"quay.io/coreos/etcd:v3.5.18",
+			"minio/minio:RELEASE.2023-03-20T20-16-18Z",
+		}
+		if includeMonitoring {
+			images = append(images,
+				"prom/prometheus:latest",
+				"grafana/grafana:latest",
+			)
+		}
 	}
 
 	return images
