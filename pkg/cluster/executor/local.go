@@ -3,12 +3,15 @@ package executor
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/zilliztech/miup/pkg/cluster/spec"
 	"gopkg.in/yaml.v3"
@@ -568,4 +571,269 @@ func (e *LocalExecutor) ensureConfigMount() error {
 	}
 
 	return os.WriteFile(e.composePath(), []byte(composeContent), 0644)
+}
+
+// Diagnose performs health diagnostics on the local Milvus deployment
+func (e *LocalExecutor) Diagnose(ctx context.Context) (*DiagnoseResult, error) {
+	result := &DiagnoseResult{
+		Healthy:      true,
+		Components:   []ComponentCheck{},
+		Connectivity: []ConnectivityCheck{},
+		Resources:    []ResourceCheck{},
+		Issues:       []Issue{},
+	}
+
+	// Check if containers are running
+	running, err := e.IsRunning(ctx)
+	if err != nil {
+		result.Healthy = false
+		result.Summary = fmt.Sprintf("Failed to check container status: %v", err)
+		return result, nil
+	}
+
+	if !running {
+		result.Healthy = false
+		result.Summary = "Instance is not running"
+		result.Issues = append(result.Issues, Issue{
+			Severity:    CheckStatusError,
+			Component:   "docker",
+			Description: "Docker containers are not running",
+			Suggestion:  "Start the instance with: miup instance start " + e.instanceName,
+		})
+		return result, nil
+	}
+
+	// Check each container
+	e.diagnoseContainers(ctx, result)
+
+	// Check connectivity
+	e.diagnoseLocalConnectivity(ctx, result)
+
+	// Generate summary
+	errorCount := 0
+	warningCount := 0
+	for _, issue := range result.Issues {
+		if issue.Severity == CheckStatusError {
+			errorCount++
+		} else if issue.Severity == CheckStatusWarning {
+			warningCount++
+		}
+	}
+
+	if errorCount > 0 {
+		result.Summary = fmt.Sprintf("Instance unhealthy: %d error(s), %d warning(s)", errorCount, warningCount)
+	} else if warningCount > 0 {
+		result.Summary = fmt.Sprintf("Instance healthy with %d warning(s)", warningCount)
+	} else {
+		result.Summary = "Instance is healthy"
+	}
+
+	return result, nil
+}
+
+// containerStatus represents the JSON output from docker compose ps
+type containerStatus struct {
+	Name    string `json:"Name"`
+	Service string `json:"Service"`
+	State   string `json:"State"`
+	Health  string `json:"Health"`
+	Status  string `json:"Status"`
+}
+
+// diagnoseContainers checks the health of each Docker container
+func (e *LocalExecutor) diagnoseContainers(ctx context.Context, result *DiagnoseResult) {
+	// Get container status using docker compose ps
+	output, err := e.runOutput(ctx, "ps", "--format", "json", "-a")
+	if err != nil {
+		result.Issues = append(result.Issues, Issue{
+			Severity:    CheckStatusWarning,
+			Component:   "docker",
+			Description: "Cannot get container status",
+			Suggestion:  "Check if Docker is running",
+		})
+		return
+	}
+
+	// Parse JSON output (one JSON object per line)
+	containerStates := make(map[string]*containerStatus)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		var cs containerStatus
+		if err := json.Unmarshal([]byte(line), &cs); err != nil {
+			continue
+		}
+		// Use service name as key (e.g., "standalone", "etcd", "minio")
+		containerStates[cs.Service] = &cs
+	}
+
+	// Check for key containers
+	containers := []string{"standalone", "etcd", "minio"}
+	for _, container := range containers {
+		check := ComponentCheck{
+			Name: container,
+		}
+
+		cs, found := containerStates[container]
+		if found && cs.State == "running" {
+			check.Status = CheckStatusOK
+			check.Message = "Running"
+			check.Replicas = 1
+			check.Ready = 1
+		} else if found {
+			check.Status = CheckStatusWarning
+			check.Message = fmt.Sprintf("Container state: %s", cs.State)
+			check.Replicas = 1
+			check.Ready = 0
+			result.Healthy = false
+			result.Issues = append(result.Issues, Issue{
+				Severity:    CheckStatusWarning,
+				Component:   container,
+				Description: fmt.Sprintf("%s container is not running (state: %s)", container, cs.State),
+				Suggestion:  fmt.Sprintf("Start the container: docker start %s-%s", e.instanceName, container),
+			})
+		} else {
+			check.Status = CheckStatusError
+			check.Message = "Not found"
+			check.Replicas = 0
+			check.Ready = 0
+			result.Healthy = false
+			result.Issues = append(result.Issues, Issue{
+				Severity:    CheckStatusError,
+				Component:   container,
+				Description: fmt.Sprintf("%s container is not running", container),
+				Suggestion:  "Redeploy the instance or check Docker logs",
+			})
+		}
+
+		result.Components = append(result.Components, check)
+	}
+
+	// Check for monitoring containers if enabled
+	if e.spec.HasMonitoring() {
+		for _, container := range []string{"prometheus"} {
+			check := ComponentCheck{Name: container}
+			cs, found := containerStates[container]
+			if found && cs.State == "running" {
+				check.Status = CheckStatusOK
+				check.Message = "Running"
+			} else {
+				check.Status = CheckStatusWarning
+				check.Message = "Not running (monitoring disabled?)"
+			}
+			result.Components = append(result.Components, check)
+		}
+	}
+}
+
+// diagnoseLocalConnectivity checks connectivity to local services
+func (e *LocalExecutor) diagnoseLocalConnectivity(ctx context.Context, result *DiagnoseResult) {
+	// Get Milvus port from spec
+	milvusPort := 19530
+	if len(e.spec.MilvusServers) > 0 {
+		milvusPort = e.spec.MilvusServers[0].Port
+	}
+
+	// Check Milvus endpoint
+	milvusTarget := fmt.Sprintf("localhost:%d", milvusPort)
+	milvusCheck := ConnectivityCheck{
+		Name:    "milvus",
+		Target:  milvusTarget,
+		Message: "gRPC endpoint",
+	}
+	if checkPort(milvusTarget) {
+		milvusCheck.Status = CheckStatusOK
+	} else {
+		milvusCheck.Status = CheckStatusError
+		milvusCheck.Message = "gRPC endpoint unreachable"
+		result.Healthy = false
+		result.Issues = append(result.Issues, Issue{
+			Severity:    CheckStatusError,
+			Component:   "milvus",
+			Description: fmt.Sprintf("Cannot connect to Milvus at %s", milvusTarget),
+			Suggestion:  "Check if Milvus container is running",
+		})
+	}
+	result.Connectivity = append(result.Connectivity, milvusCheck)
+
+	// Check etcd
+	etcdPort := 2379
+	if len(e.spec.EtcdServers) > 0 {
+		etcdPort = e.spec.EtcdServers[0].ClientPort
+	}
+	etcdTarget := fmt.Sprintf("localhost:%d", etcdPort)
+	etcdCheck := ConnectivityCheck{
+		Name:    "etcd",
+		Target:  etcdTarget,
+		Message: "etcd client port",
+	}
+	if checkPort(etcdTarget) {
+		etcdCheck.Status = CheckStatusOK
+	} else {
+		etcdCheck.Status = CheckStatusError
+		etcdCheck.Message = "etcd unreachable"
+		result.Healthy = false
+		result.Issues = append(result.Issues, Issue{
+			Severity:    CheckStatusError,
+			Component:   "etcd",
+			Description: fmt.Sprintf("Cannot connect to etcd at %s", etcdTarget),
+			Suggestion:  "Check if etcd container is running",
+		})
+	}
+	result.Connectivity = append(result.Connectivity, etcdCheck)
+
+	// Check MinIO
+	minioPort := 9000
+	if len(e.spec.MinioServers) > 0 {
+		minioPort = e.spec.MinioServers[0].Port
+	}
+	minioTarget := fmt.Sprintf("localhost:%d", minioPort)
+	minioCheck := ConnectivityCheck{
+		Name:    "minio",
+		Target:  minioTarget,
+		Message: "S3 API endpoint",
+	}
+	if checkPort(minioTarget) {
+		minioCheck.Status = CheckStatusOK
+	} else {
+		minioCheck.Status = CheckStatusError
+		minioCheck.Message = "MinIO unreachable"
+		result.Healthy = false
+		result.Issues = append(result.Issues, Issue{
+			Severity:    CheckStatusError,
+			Component:   "minio",
+			Description: fmt.Sprintf("Cannot connect to MinIO at %s", minioTarget),
+			Suggestion:  "Check if MinIO container is running",
+		})
+	}
+	result.Connectivity = append(result.Connectivity, minioCheck)
+
+	// Check monitoring if enabled
+	if e.spec.HasMonitoring() && len(e.spec.MonitorServers) > 0 {
+		promTarget := fmt.Sprintf("localhost:%d", e.spec.MonitorServers[0].PrometheusPort)
+		promCheck := ConnectivityCheck{
+			Name:    "prometheus",
+			Target:  promTarget,
+			Message: "Metrics endpoint",
+		}
+		if checkPort(promTarget) {
+			promCheck.Status = CheckStatusOK
+		} else {
+			promCheck.Status = CheckStatusWarning
+			promCheck.Message = "Prometheus unreachable"
+		}
+		result.Connectivity = append(result.Connectivity, promCheck)
+	}
+}
+
+// checkPort tests if a TCP port is reachable
+func checkPort(target string) bool {
+	conn, err := net.DialTimeout("tcp", target, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }

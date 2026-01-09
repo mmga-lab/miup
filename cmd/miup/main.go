@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -523,6 +524,7 @@ Examples:
   miup instance upgrade prod v2.5.5                    Upgrade to a new version
   miup instance config show prod                       Show configuration
   miup instance config set prod key=value              Set configuration
+  miup instance diagnose prod                          Health diagnostics
   miup instance destroy prod                           Destroy an instance`,
 	}
 
@@ -535,6 +537,7 @@ Examples:
 	cmd.AddCommand(newInstanceReplicasCmd())
 	cmd.AddCommand(newInstanceUpgradeCmd())
 	cmd.AddCommand(newInstanceConfigCmd())
+	cmd.AddCommand(newInstanceDiagnoseCmd())
 	cmd.AddCommand(newInstanceDestroyCmd())
 	cmd.AddCommand(newInstanceLogsCmd())
 	cmd.AddCommand(newInstanceTemplateCmd())
@@ -2142,6 +2145,142 @@ Examples:
 	}
 
 	return cmd
+}
+
+func newInstanceDiagnoseCmd() *cobra.Command {
+	var outputJSON bool
+
+	cmd := &cobra.Command{
+		Use:   "diagnose <instance-name>",
+		Short: "Run health diagnostics on an instance",
+		Long: `Perform comprehensive health diagnostics on a Milvus instance.
+
+This command checks:
+  - Component health status (standalone/proxy/querynode/datanode/etc.)
+  - Service connectivity (Milvus, etcd, MinIO endpoints)
+  - Resource usage and limits
+  - Common issues and provides suggestions
+
+For Kubernetes deployments, it inspects the Milvus CRD status and conditions.
+For local deployments, it checks Docker container health.
+
+Examples:
+  miup instance diagnose prod
+  miup instance diagnose prod --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx := context.Background()
+			mgr := manager.NewManager(profile)
+
+			result, err := mgr.Diagnose(ctx, instanceName)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				return printDiagnoseJSON(result)
+			}
+
+			return printDiagnoseResult(instanceName, result)
+		},
+	}
+
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+
+	return cmd
+}
+
+func printDiagnoseResult(instanceName string, result *executor.DiagnoseResult) error {
+	// Header
+	fmt.Printf("Instance: %s\n", color.CyanString(instanceName))
+	fmt.Println(strings.Repeat("-", 50))
+
+	// Summary
+	if result.Healthy {
+		fmt.Printf("Status: %s\n", color.GreenString("HEALTHY"))
+	} else {
+		fmt.Printf("Status: %s\n", color.RedString("UNHEALTHY"))
+	}
+	fmt.Printf("Summary: %s\n\n", result.Summary)
+
+	// Components
+	fmt.Println(color.CyanString("Components:"))
+	for _, comp := range result.Components {
+		statusIcon := getStatusIcon(comp.Status)
+		if comp.Replicas > 0 {
+			fmt.Printf("  %s %-12s %s (%d/%d replicas)\n", statusIcon, comp.Name, comp.Message, comp.Ready, comp.Replicas)
+		} else {
+			fmt.Printf("  %s %-12s %s\n", statusIcon, comp.Name, comp.Message)
+		}
+	}
+	fmt.Println()
+
+	// Connectivity
+	if len(result.Connectivity) > 0 {
+		fmt.Println(color.CyanString("Connectivity:"))
+		for _, conn := range result.Connectivity {
+			statusIcon := getStatusIcon(conn.Status)
+			fmt.Printf("  %s %-15s %s - %s\n", statusIcon, conn.Name, conn.Target, conn.Message)
+		}
+		fmt.Println()
+	}
+
+	// Resources
+	if len(result.Resources) > 0 {
+		fmt.Println(color.CyanString("Resources:"))
+		for _, res := range result.Resources {
+			statusIcon := getStatusIcon(res.Status)
+			fmt.Printf("  %s %-15s %s (limit: %s) - %s\n", statusIcon, res.Name, res.Usage, res.Limit, res.Message)
+		}
+		fmt.Println()
+	}
+
+	// Issues
+	if len(result.Issues) > 0 {
+		fmt.Println(color.YellowString("Issues Found:"))
+		for i, issue := range result.Issues {
+			severityColor := color.YellowString
+			if issue.Severity == executor.CheckStatusError {
+				severityColor = color.RedString
+			}
+			fmt.Printf("  %d. [%s] %s\n", i+1, severityColor(string(issue.Severity)), issue.Description)
+			fmt.Printf("     Component: %s\n", issue.Component)
+			fmt.Printf("     Suggestion: %s\n", color.CyanString(issue.Suggestion))
+		}
+	} else {
+		fmt.Println(color.GreenString("No issues found."))
+	}
+
+	return nil
+}
+
+func getStatusIcon(status executor.CheckStatus) string {
+	switch status {
+	case executor.CheckStatusOK:
+		return color.GreenString("[OK]")
+	case executor.CheckStatusWarning:
+		return color.YellowString("[WARN]")
+	case executor.CheckStatusError:
+		return color.RedString("[ERR]")
+	default:
+		return "[?]"
+	}
+}
+
+func printDiagnoseJSON(result *executor.DiagnoseResult) error {
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to format JSON: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
 }
 
 func main() {

@@ -68,11 +68,14 @@ type MilvusDependencies struct {
 
 // EtcdConfig defines etcd configuration
 type EtcdConfig struct {
+	// Endpoints specifies etcd endpoints (used when External is true)
+	Endpoints []string `json:"endpoints,omitempty"`
+
+	// External specifies whether to use external etcd
+	External bool `json:"external,omitempty"`
+
 	// InCluster specifies in-cluster etcd configuration
 	InCluster *InClusterConfig `json:"inCluster,omitempty"`
-
-	// External specifies external etcd endpoints
-	External *ExternalEtcdConfig `json:"external,omitempty"`
 }
 
 // InClusterConfig defines in-cluster component configuration
@@ -87,40 +90,22 @@ type InClusterConfig struct {
 	Values map[string]interface{} `json:"values,omitempty"`
 }
 
-// ExternalEtcdConfig defines external etcd configuration
-type ExternalEtcdConfig struct {
-	// Endpoints specifies etcd endpoints
-	Endpoints []string `json:"endpoints,omitempty"`
-}
-
 // StorageConfig defines storage configuration
 type StorageConfig struct {
-	// InCluster specifies in-cluster MinIO configuration
-	InCluster *InClusterConfig `json:"inCluster,omitempty"`
+	// Type specifies storage type (e.g., "MinIO", "S3")
+	Type string `json:"type,omitempty"`
 
-	// External specifies external S3-compatible storage
-	External *ExternalStorageConfig `json:"external,omitempty"`
-}
-
-// ExternalStorageConfig defines external S3-compatible storage
-type ExternalStorageConfig struct {
-	// Endpoint specifies the S3 endpoint
+	// Endpoint specifies the storage endpoint (used when External is true)
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// Bucket specifies the bucket name
-	Bucket string `json:"bucket,omitempty"`
+	// External specifies whether to use external storage
+	External bool `json:"external,omitempty"`
 
-	// AccessKeyID specifies the access key
-	AccessKeyID string `json:"accessKeyID,omitempty"`
+	// SecretRef specifies the secret containing credentials
+	SecretRef string `json:"secretRef,omitempty"`
 
-	// SecretAccessKey specifies the secret key
-	SecretAccessKey string `json:"secretAccessKey,omitempty"`
-
-	// UseSSL specifies whether to use SSL
-	UseSSL bool `json:"useSSL,omitempty"`
-
-	// UseIAM specifies whether to use IAM role
-	UseIAM bool `json:"useIAM,omitempty"`
+	// InCluster specifies in-cluster MinIO configuration
+	InCluster *InClusterConfig `json:"inCluster,omitempty"`
 }
 
 // MilvusComponents defines component configurations
@@ -227,19 +212,33 @@ type MilvusStatus struct {
 	// Endpoint is the service endpoint
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// Replicas shows replica counts
-	Replicas MilvusReplicas `json:"replicas,omitempty"`
+	// ComponentsDeployStatus shows deployment status for each component
+	ComponentsDeployStatus map[string]ComponentDeployStatus `json:"componentsDeployStatus,omitempty"`
 }
 
-// MilvusReplicas shows replica counts for components
-type MilvusReplicas struct {
-	Standalone int32 `json:"standalone,omitempty"`
-	Proxy      int32 `json:"proxy,omitempty"`
-	RootCoord  int32 `json:"rootCoord,omitempty"`
-	QueryCoord int32 `json:"queryCoord,omitempty"`
-	DataCoord  int32 `json:"dataCoord,omitempty"`
-	IndexCoord int32 `json:"indexCoord,omitempty"`
-	QueryNode  int32 `json:"queryNode,omitempty"`
-	DataNode   int32 `json:"dataNode,omitempty"`
-	IndexNode  int32 `json:"indexNode,omitempty"`
+// ComponentDeployStatus shows deployment status for a component
+type ComponentDeployStatus struct {
+	// Generation is the deployment generation
+	Generation int64 `json:"generation,omitempty"`
+
+	// Image is the current image
+	Image string `json:"image,omitempty"`
+
+	// Status contains deployment status details
+	Status DeploymentStatus `json:"status,omitempty"`
+}
+
+// DeploymentStatus contains deployment status details
+type DeploymentStatus struct {
+	// Replicas is the total number of replicas
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// ReadyReplicas is the number of ready replicas
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+
+	// AvailableReplicas is the number of available replicas
+	AvailableReplicas int32 `json:"availableReplicas,omitempty"`
+
+	// UpdatedReplicas is the number of updated replicas
+	UpdatedReplicas int32 `json:"updatedReplicas,omitempty"`
 }

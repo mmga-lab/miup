@@ -42,6 +42,74 @@ type Executor interface {
 
 	// SetConfig updates the Milvus configuration
 	SetConfig(ctx context.Context, config map[string]interface{}) error
+
+	// Diagnose performs health diagnostics on the cluster
+	Diagnose(ctx context.Context) (*DiagnoseResult, error)
+}
+
+// DiagnoseResult contains the results of a health diagnosis
+type DiagnoseResult struct {
+	// Overall health status
+	Healthy bool `json:"healthy"`
+
+	// Summary message
+	Summary string `json:"summary"`
+
+	// Component checks
+	Components []ComponentCheck `json:"components"`
+
+	// Connectivity checks
+	Connectivity []ConnectivityCheck `json:"connectivity"`
+
+	// Resource checks
+	Resources []ResourceCheck `json:"resources"`
+
+	// Issues found
+	Issues []Issue `json:"issues"`
+}
+
+// CheckStatus represents the status of a check
+type CheckStatus string
+
+const (
+	CheckStatusOK      CheckStatus = "OK"
+	CheckStatusWarning CheckStatus = "WARNING"
+	CheckStatusError   CheckStatus = "ERROR"
+)
+
+// ComponentCheck represents a component health check
+type ComponentCheck struct {
+	Name     string      `json:"name"`
+	Status   CheckStatus `json:"status"`
+	Message  string      `json:"message"`
+	Replicas int         `json:"replicas,omitempty"`
+	Ready    int         `json:"ready,omitempty"`
+}
+
+// ConnectivityCheck represents a connectivity check
+type ConnectivityCheck struct {
+	Name    string      `json:"name"`
+	Target  string      `json:"target"`
+	Status  CheckStatus `json:"status"`
+	Latency string      `json:"latency,omitempty"`
+	Message string      `json:"message"`
+}
+
+// ResourceCheck represents a resource usage check
+type ResourceCheck struct {
+	Name      string      `json:"name"`
+	Status    CheckStatus `json:"status"`
+	Usage     string      `json:"usage"`
+	Limit     string      `json:"limit,omitempty"`
+	Message   string      `json:"message"`
+}
+
+// Issue represents a diagnosed issue
+type Issue struct {
+	Severity    CheckStatus `json:"severity"`
+	Component   string      `json:"component"`
+	Description string      `json:"description"`
+	Suggestion  string      `json:"suggestion"`
 }
 
 // ScaleOptions defines options for scaling a component

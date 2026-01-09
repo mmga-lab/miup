@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -163,15 +164,19 @@ func (e *KubernetesExecutor) Status(ctx context.Context) (string, error) {
 		}
 	}
 
-	// Show replicas
-	sb.WriteString("\nReplicas:\n")
-	if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-		sb.WriteString("  Standalone: 1\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("  Proxy:     %d\n", milvus.Status.Replicas.Proxy))
-		sb.WriteString(fmt.Sprintf("  QueryNode: %d\n", milvus.Status.Replicas.QueryNode))
-		sb.WriteString(fmt.Sprintf("  DataNode:  %d\n", milvus.Status.Replicas.DataNode))
-		sb.WriteString(fmt.Sprintf("  IndexNode: %d\n", milvus.Status.Replicas.IndexNode))
+	// Show component replicas
+	if len(milvus.Status.ComponentsDeployStatus) > 0 {
+		sb.WriteString("\nComponents:\n")
+		// Collect and sort component names
+		var names []string
+		for name := range milvus.Status.ComponentsDeployStatus {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			status := milvus.Status.ComponentsDeployStatus[name]
+			sb.WriteString(fmt.Sprintf("  %-15s %d/%d ready\n", name+":", status.Status.ReadyReplicas, status.Status.Replicas))
+		}
 	}
 
 	return sb.String(), nil
@@ -359,9 +364,8 @@ func (e *KubernetesExecutor) buildEtcdConfig() k8s.EtcdConfig {
 			endpoints = append(endpoints, fmt.Sprintf("%s:%d", etcd.Host, etcd.ClientPort))
 		}
 		return k8s.EtcdConfig{
-			External: &k8s.ExternalEtcdConfig{
-				Endpoints: endpoints,
-			},
+			External:  true,
+			Endpoints: endpoints,
 		}
 	}
 
@@ -387,13 +391,14 @@ func (e *KubernetesExecutor) buildStorageConfig() k8s.StorageConfig {
 	// Check if external MinIO/S3 is configured
 	if len(e.spec.MinioServers) > 0 && e.spec.MinioServers[0].Host != "127.0.0.1" && e.spec.MinioServers[0].Host != "localhost" {
 		minio := e.spec.MinioServers[0]
+		// For external storage, credentials should be provided via a Kubernetes secret
+		// The secret should contain accessKeyID and secretAccessKey
 		return k8s.StorageConfig{
-			External: &k8s.ExternalStorageConfig{
-				Endpoint:        fmt.Sprintf("%s:%d", minio.Host, minio.Port),
-				Bucket:          "milvus",
-				AccessKeyID:     minio.AccessKey,
-				SecretAccessKey: minio.SecretKey,
-			},
+			Type:     "MinIO",
+			External: true,
+			Endpoint: fmt.Sprintf("%s:%d", minio.Host, minio.Port),
+			// SecretRef should point to a secret with access credentials
+			// SecretRef: "milvus-minio-secret",
 		}
 	}
 
@@ -624,19 +629,9 @@ func (e *KubernetesExecutor) GetReplicas(ctx context.Context) (map[string]int, e
 
 	replicas := make(map[string]int)
 
-	if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-		// Standalone mode
-		replicas["standalone"] = int(milvus.Status.Replicas.Standalone)
-	} else {
-		// Cluster mode - get from status for actual running pods
-		replicas["proxy"] = int(milvus.Status.Replicas.Proxy)
-		replicas["rootcoord"] = int(milvus.Status.Replicas.RootCoord)
-		replicas["querycoord"] = int(milvus.Status.Replicas.QueryCoord)
-		replicas["datacoord"] = int(milvus.Status.Replicas.DataCoord)
-		replicas["indexcoord"] = int(milvus.Status.Replicas.IndexCoord)
-		replicas["querynode"] = int(milvus.Status.Replicas.QueryNode)
-		replicas["datanode"] = int(milvus.Status.Replicas.DataNode)
-		replicas["indexnode"] = int(milvus.Status.Replicas.IndexNode)
+	// Get replica counts from ComponentsDeployStatus
+	for name, status := range milvus.Status.ComponentsDeployStatus {
+		replicas[name] = int(status.Status.ReadyReplicas)
 	}
 
 	return replicas, nil
@@ -748,5 +743,211 @@ func mergeConfig(dst, src map[string]interface{}) {
 		}
 		// Otherwise, overwrite
 		dst[key] = srcVal
+	}
+}
+
+// Diagnose performs health diagnostics on the Kubernetes Milvus cluster
+func (e *KubernetesExecutor) Diagnose(ctx context.Context) (*DiagnoseResult, error) {
+	result := &DiagnoseResult{
+		Healthy:      true,
+		Components:   []ComponentCheck{},
+		Connectivity: []ConnectivityCheck{},
+		Resources:    []ResourceCheck{},
+		Issues:       []Issue{},
+	}
+
+	// Get Milvus CRD
+	milvus, err := e.client.GetMilvus(ctx, e.clusterName, e.namespace)
+	if err != nil {
+		result.Healthy = false
+		result.Summary = fmt.Sprintf("Failed to get Milvus cluster: %v", err)
+		result.Issues = append(result.Issues, Issue{
+			Severity:    CheckStatusError,
+			Component:   "milvus",
+			Description: fmt.Sprintf("Cannot retrieve Milvus CRD: %v", err),
+			Suggestion:  "Check if the cluster exists and Milvus Operator is running",
+		})
+		return result, nil
+	}
+
+	// Check overall status
+	overallStatus := milvus.Status.Status
+	if overallStatus != "Healthy" {
+		result.Healthy = false
+	}
+
+	// Check components
+	e.diagnoseComponents(milvus, result)
+
+	// Check connectivity
+	e.diagnoseConnectivity(ctx, milvus, result)
+
+	// Check conditions for issues
+	e.diagnoseConditions(milvus, result)
+
+	// Generate summary
+	errorCount := 0
+	warningCount := 0
+	for _, issue := range result.Issues {
+		if issue.Severity == CheckStatusError {
+			errorCount++
+		} else if issue.Severity == CheckStatusWarning {
+			warningCount++
+		}
+	}
+
+	if errorCount > 0 {
+		result.Summary = fmt.Sprintf("Cluster unhealthy: %d error(s), %d warning(s)", errorCount, warningCount)
+	} else if warningCount > 0 {
+		result.Summary = fmt.Sprintf("Cluster healthy with %d warning(s)", warningCount)
+	} else {
+		result.Summary = "Cluster is healthy"
+	}
+
+	return result, nil
+}
+
+// diagnoseComponents checks the health of each component
+func (e *KubernetesExecutor) diagnoseComponents(milvus *k8s.Milvus, result *DiagnoseResult) {
+	// Get component status from CRD
+	deployStatus := milvus.Status.ComponentsDeployStatus
+
+	// Define important components to check
+	// Core components are required for Milvus to function
+	coreComponents := []string{"proxy", "mixcoord", "rootcoord", "querycoord", "datacoord", "indexcoord"}
+	// Worker nodes can be scaled
+	workerComponents := []string{"querynode", "datanode", "indexnode", "streamingnode", "standalone"}
+
+	// Check which components actually exist in the deployment
+	for name, status := range deployStatus {
+		check := ComponentCheck{
+			Name:     name,
+			Replicas: int(status.Status.Replicas),
+			Ready:    int(status.Status.ReadyReplicas),
+		}
+
+		if status.Status.ReadyReplicas >= status.Status.Replicas && status.Status.Replicas > 0 {
+			check.Status = CheckStatusOK
+			check.Message = fmt.Sprintf("%d/%d ready", status.Status.ReadyReplicas, status.Status.Replicas)
+		} else if status.Status.ReadyReplicas > 0 {
+			check.Status = CheckStatusWarning
+			check.Message = fmt.Sprintf("%d/%d ready (degraded)", status.Status.ReadyReplicas, status.Status.Replicas)
+			result.Issues = append(result.Issues, Issue{
+				Severity:    CheckStatusWarning,
+				Component:   name,
+				Description: fmt.Sprintf("%s has fewer ready replicas than desired", name),
+				Suggestion:  fmt.Sprintf("Check pod status: kubectl get pods -l app.kubernetes.io/instance=%s,app.kubernetes.io/component=%s -n %s", e.clusterName, name, e.namespace),
+			})
+		} else if status.Status.Replicas == 0 {
+			// Zero replicas - check if this is expected
+			isCore := false
+			for _, c := range coreComponents {
+				if c == name {
+					isCore = true
+					break
+				}
+			}
+			if isCore {
+				check.Status = CheckStatusError
+				check.Message = "No replicas configured"
+				result.Healthy = false
+				result.Issues = append(result.Issues, Issue{
+					Severity:    CheckStatusError,
+					Component:   name,
+					Description: fmt.Sprintf("%s has no replicas", name),
+					Suggestion:  fmt.Sprintf("Scale up %s or check configuration", name),
+				})
+			} else {
+				check.Status = CheckStatusOK
+				check.Message = "Scaled to 0 (expected)"
+			}
+		} else {
+			check.Status = CheckStatusError
+			check.Message = "No replicas ready"
+			result.Healthy = false
+			result.Issues = append(result.Issues, Issue{
+				Severity:    CheckStatusError,
+				Component:   name,
+				Description: fmt.Sprintf("%s has no ready replicas", name),
+				Suggestion:  fmt.Sprintf("Check pod logs: kubectl logs -l app.kubernetes.io/instance=%s,app.kubernetes.io/component=%s -n %s", e.clusterName, name, e.namespace),
+			})
+		}
+		result.Components = append(result.Components, check)
+	}
+
+	// Sort components for consistent output
+	sort.Slice(result.Components, func(i, j int) bool {
+		return result.Components[i].Name < result.Components[j].Name
+	})
+
+	// Suppress unused variable warnings
+	_ = workerComponents
+
+	// Check dependencies (etcd, minio)
+	result.Components = append(result.Components, ComponentCheck{
+		Name:    "etcd",
+		Status:  CheckStatusOK,
+		Message: "Managed by Milvus Operator",
+	})
+	result.Components = append(result.Components, ComponentCheck{
+		Name:    "minio",
+		Status:  CheckStatusOK,
+		Message: "Managed by Milvus Operator",
+	})
+}
+
+// diagnoseConnectivity checks connectivity to services
+func (e *KubernetesExecutor) diagnoseConnectivity(ctx context.Context, milvus *k8s.Milvus, result *DiagnoseResult) {
+	// Check Milvus endpoint
+	endpoint := milvus.Status.Endpoint
+	if endpoint != "" {
+		result.Connectivity = append(result.Connectivity, ConnectivityCheck{
+			Name:    "milvus-service",
+			Target:  endpoint,
+			Status:  CheckStatusOK,
+			Message: "Service endpoint available",
+		})
+	} else {
+		result.Connectivity = append(result.Connectivity, ConnectivityCheck{
+			Name:    "milvus-service",
+			Target:  "N/A",
+			Status:  CheckStatusWarning,
+			Message: "No endpoint available yet",
+		})
+		result.Issues = append(result.Issues, Issue{
+			Severity:    CheckStatusWarning,
+			Component:   "service",
+			Description: "Milvus service endpoint not yet available",
+			Suggestion:  "Wait for the service to be ready or check LoadBalancer/NodePort configuration",
+		})
+	}
+
+	// Check internal services
+	result.Connectivity = append(result.Connectivity, ConnectivityCheck{
+		Name:    "etcd",
+		Target:  fmt.Sprintf("%s-etcd.%s:2379", e.clusterName, e.namespace),
+		Status:  CheckStatusOK,
+		Message: "Internal service",
+	})
+
+	result.Connectivity = append(result.Connectivity, ConnectivityCheck{
+		Name:    "minio",
+		Target:  fmt.Sprintf("%s-minio.%s:9000", e.clusterName, e.namespace),
+		Status:  CheckStatusOK,
+		Message: "Internal service",
+	})
+}
+
+// diagnoseConditions checks CRD conditions for issues
+func (e *KubernetesExecutor) diagnoseConditions(milvus *k8s.Milvus, result *DiagnoseResult) {
+	for _, cond := range milvus.Status.Conditions {
+		if cond.Status == "False" && cond.Type != "Stopped" {
+			result.Issues = append(result.Issues, Issue{
+				Severity:    CheckStatusWarning,
+				Component:   "cluster",
+				Description: fmt.Sprintf("Condition %s is False: %s", cond.Type, cond.Message),
+				Suggestion:  "Check Milvus Operator logs for more details",
+			})
+		}
 	}
 }

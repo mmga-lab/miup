@@ -605,6 +605,33 @@ func (m *Manager) SetConfig(ctx context.Context, name string, config map[string]
 	return nil
 }
 
+// Diagnose performs health diagnostics on the cluster
+func (m *Manager) Diagnose(ctx context.Context, name string) (*executor.DiagnoseResult, error) {
+	if !m.Exists(name) {
+		return nil, fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return nil, err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return nil, err
+	}
+
+	exec, err := m.createExecutor(name, specification, DeployOptions{
+		Backend:       meta.Backend,
+		MilvusVersion: meta.MilvusVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return exec.Diagnose(ctx)
+}
+
 // Exists checks if a cluster exists
 func (m *Manager) Exists(name string) bool {
 	_, err := os.Stat(m.ClusterDir(name))
