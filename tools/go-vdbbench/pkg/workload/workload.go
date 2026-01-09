@@ -7,9 +7,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zilliztech/go-vdbbench/pkg/database"
-	"github.com/zilliztech/go-vdbbench/pkg/dataset"
-	"github.com/zilliztech/go-vdbbench/pkg/metrics"
+	"github.com/mmga-lab/go-vdbbench/pkg/database"
+	"github.com/mmga-lab/go-vdbbench/pkg/dataset"
+	"github.com/mmga-lab/go-vdbbench/pkg/metrics"
 )
 
 // Config holds workload configuration

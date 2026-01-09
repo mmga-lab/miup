@@ -1,4 +1,4 @@
-module github.com/zilliztech/go-vdbbench
+module github.com/mmga-lab/go-vdbbench
 
 go 1.21
 

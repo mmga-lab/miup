@@ -14,7 +14,7 @@ MiUp is a component manager for [Milvus](https://milvus.io) vector database, ins
 ### From Source
 
 ```bash
-git clone https://github.com/zilliztech/miup.git
+git clone https://github.com/mmga-lab/miup.git
 cd miup
 make install
 ```
@@ -22,7 +22,7 @@ make install
 ### Download Binary
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/zilliztech/miup/main/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/mmga-lab/miup/main/install.sh | sh
 ```
 
 ## Quick Start

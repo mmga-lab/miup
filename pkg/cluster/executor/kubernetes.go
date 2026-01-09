@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zilliztech/miup/pkg/cluster/spec"
-	"github.com/zilliztech/miup/pkg/k8s"
+	"github.com/mmga-lab/miup/pkg/cluster/spec"
+	"github.com/mmga-lab/miup/pkg/k8s"
 )
 
 // KubernetesExecutor executes cluster operations on Kubernetes using Milvus Operator

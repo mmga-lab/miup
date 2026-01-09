@@ -1,4 +1,4 @@
-module github.com/zilliztech/miup
+module github.com/mmga-lab/miup
 
 go 1.25.5
 

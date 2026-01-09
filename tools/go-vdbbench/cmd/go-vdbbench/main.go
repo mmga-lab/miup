@@ -10,10 +10,10 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"github.com/zilliztech/go-vdbbench/pkg/database"
-	"github.com/zilliztech/go-vdbbench/pkg/dataset"
-	"github.com/zilliztech/go-vdbbench/pkg/metrics"
-	"github.com/zilliztech/go-vdbbench/pkg/workload"
+	"github.com/mmga-lab/go-vdbbench/pkg/database"
+	"github.com/mmga-lab/go-vdbbench/pkg/dataset"
+	"github.com/mmga-lab/go-vdbbench/pkg/metrics"
+	"github.com/mmga-lab/go-vdbbench/pkg/workload"
 )
 
 var (

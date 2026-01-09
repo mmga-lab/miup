@@ -13,13 +13,13 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"github.com/zilliztech/miup/pkg/cluster/executor"
-	"github.com/zilliztech/miup/pkg/cluster/manager"
-	"github.com/zilliztech/miup/pkg/cluster/spec"
-	"github.com/zilliztech/miup/pkg/localdata"
-	"github.com/zilliztech/miup/pkg/logger"
-	"github.com/zilliztech/miup/pkg/playground"
-	"github.com/zilliztech/miup/pkg/version"
+	"github.com/mmga-lab/miup/pkg/cluster/executor"
+	"github.com/mmga-lab/miup/pkg/cluster/manager"
+	"github.com/mmga-lab/miup/pkg/cluster/spec"
+	"github.com/mmga-lab/miup/pkg/localdata"
+	"github.com/mmga-lab/miup/pkg/logger"
+	"github.com/mmga-lab/miup/pkg/playground"
+	"github.com/mmga-lab/miup/pkg/version"
 	"gopkg.in/yaml.v3"
 )
 
@@ -41,7 +41,7 @@ Quick start:
   miup install milvus      Install Milvus component
   miup instance deploy     Deploy a Milvus instance
 
-For more information, visit: https://github.com/zilliztech/miup`,
+For more information, visit: https://github.com/mmga-lab/miup`,
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
 			if verbose {
 				logger.EnableDebug()

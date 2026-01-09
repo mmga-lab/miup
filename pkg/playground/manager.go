@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/zilliztech/miup/pkg/executor"
-	"github.com/zilliztech/miup/pkg/localdata"
-	"github.com/zilliztech/miup/pkg/logger"
+	"github.com/mmga-lab/miup/pkg/executor"
+	"github.com/mmga-lab/miup/pkg/localdata"
+	"github.com/mmga-lab/miup/pkg/logger"
 )
 
 const (

@@ -13,7 +13,7 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/zilliztech/miup/pkg/cluster/spec"
+	"github.com/mmga-lab/miup/pkg/cluster/spec"
 	"gopkg.in/yaml.v3"
 )
 

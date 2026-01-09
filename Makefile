@@ -5,10 +5,10 @@ GIT_HASH ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 
-LDFLAGS := -X github.com/zilliztech/miup/pkg/version.MiUpVersion=$(VERSION) \
-           -X github.com/zilliztech/miup/pkg/version.GitHash=$(GIT_HASH) \
-           -X github.com/zilliztech/miup/pkg/version.GitBranch=$(GIT_BRANCH) \
-           -X github.com/zilliztech/miup/pkg/version.BuildTime=$(BUILD_TIME)
+LDFLAGS := -X github.com/mmga-lab/miup/pkg/version.MiUpVersion=$(VERSION) \
+           -X github.com/mmga-lab/miup/pkg/version.GitHash=$(GIT_HASH) \
+           -X github.com/mmga-lab/miup/pkg/version.GitBranch=$(GIT_BRANCH) \
+           -X github.com/mmga-lab/miup/pkg/version.BuildTime=$(BUILD_TIME)
 
 BINARY := miup
 BUILD_DIR := bin

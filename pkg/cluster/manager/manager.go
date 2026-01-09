@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zilliztech/miup/pkg/cluster/executor"
-	"github.com/zilliztech/miup/pkg/cluster/spec"
-	"github.com/zilliztech/miup/pkg/localdata"
-	"github.com/zilliztech/miup/pkg/logger"
+	"github.com/mmga-lab/miup/pkg/cluster/executor"
+	"github.com/mmga-lab/miup/pkg/cluster/spec"
+	"github.com/mmga-lab/miup/pkg/localdata"
+	"github.com/mmga-lab/miup/pkg/logger"
 )
 
 const (
