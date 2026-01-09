@@ -201,7 +201,7 @@ services:
       - milvus_data:/var/lib/milvus
 {{- if .HasTLS}}
       - ./tls:/milvus/tls:ro
-      - ./milvus.yaml:/milvus/configs/milvus.yaml:ro
+      - ./user.yaml:/milvus/configs/user.yaml:ro
 {{- end}}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
@@ -212,6 +212,9 @@ services:
     ports:
       - "{{(index .Spec.MilvusServers 0).Port}}:19530"
       - "9091:9091"
+{{- if .HasTLS}}
+      - "9080:9080"
+{{- end}}
     depends_on:
       etcd:
         condition: service_healthy
@@ -339,11 +342,11 @@ func (e *LocalExecutor) setupTLS() error {
 		}
 	}
 
-	// Generate milvus.yaml with TLS configuration
+	// Generate user.yaml with TLS configuration (uses user.yaml to only override TLS settings, keeping defaults)
 	milvusConfig := e.generateMilvusConfig()
-	milvusConfigPath := filepath.Join(e.workDir, "milvus.yaml")
-	if err := os.WriteFile(milvusConfigPath, []byte(milvusConfig), 0644); err != nil {
-		return fmt.Errorf("failed to write milvus.yaml: %w", err)
+	userConfigPath := filepath.Join(e.workDir, "user.yaml")
+	if err := os.WriteFile(userConfigPath, []byte(milvusConfig), 0644); err != nil {
+		return fmt.Errorf("failed to write user.yaml: %w", err)
 	}
 
 	return nil
@@ -367,11 +370,17 @@ tls:
 		config += "  caPemPath: /milvus/tls/ca.pem\n"
 	}
 
-	// Add TLS mode
+	// Add TLS mode and proxy HTTP port configuration
+	// When TLS is enabled, HTTP and gRPC must use different ports
 	config += fmt.Sprintf(`
 common:
   security:
     tlsMode: %d
+
+proxy:
+  http:
+    enabled: true
+    port: 9080
 `, tlsMode)
 
 	// Add internal TLS if enabled
