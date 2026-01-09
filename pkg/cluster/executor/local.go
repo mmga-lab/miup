@@ -409,7 +409,7 @@ func tlsModeDescription(mode int) string {
 }
 
 // Scale is not supported for local deployments (standalone mode only)
-func (e *LocalExecutor) Scale(ctx context.Context, component string, replicas int) error {
+func (e *LocalExecutor) Scale(ctx context.Context, component string, opts ScaleOptions) error {
 	return fmt.Errorf("scaling is not supported for local deployments. Local mode only supports standalone Milvus. Use Kubernetes deployment for scaling")
 }
 
@@ -428,4 +428,51 @@ func (e *LocalExecutor) GetReplicas(ctx context.Context) (map[string]int, error)
 		replicas["standalone"] = 0
 	}
 	return replicas, nil
+}
+
+// Upgrade upgrades the local Milvus deployment to the specified version
+func (e *LocalExecutor) Upgrade(ctx context.Context, version string) error {
+	// Normalize version format
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
+	// Check if already at the target version
+	if e.milvusVersion == version {
+		return fmt.Errorf("instance is already running version %s", version)
+	}
+
+	// Update the version
+	oldVersion := e.milvusVersion
+	e.milvusVersion = version
+
+	// Regenerate docker-compose.yaml with new version
+	composeContent, err := e.generateComposeFile()
+	if err != nil {
+		e.milvusVersion = oldVersion // Rollback on error
+		return fmt.Errorf("failed to generate compose file: %w", err)
+	}
+
+	composePath := e.composePath()
+	if err := os.WriteFile(composePath, []byte(composeContent), 0644); err != nil {
+		e.milvusVersion = oldVersion // Rollback on error
+		return fmt.Errorf("failed to write compose file: %w", err)
+	}
+
+	// Pull new image and recreate containers
+	if err := e.run(ctx, "pull"); err != nil {
+		return fmt.Errorf("failed to pull new image: %w", err)
+	}
+
+	// Recreate containers with new image (rolling update for standalone is just a restart)
+	if err := e.run(ctx, "up", "-d", "--remove-orphans"); err != nil {
+		return fmt.Errorf("failed to recreate containers: %w", err)
+	}
+
+	return nil
+}
+
+// GetVersion returns the current Milvus version for local deployment
+func (e *LocalExecutor) GetVersion(ctx context.Context) (string, error) {
+	return e.milvusVersion, nil
 }

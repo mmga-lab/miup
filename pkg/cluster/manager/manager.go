@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/zilliztech/miup/pkg/cluster/executor"
 	"github.com/zilliztech/miup/pkg/cluster/spec"
@@ -357,8 +358,8 @@ func (m *Manager) Logs(ctx context.Context, name string, service string, tail in
 	return exec.Logs(ctx, service, tail)
 }
 
-// Scale scales a component in the cluster
-func (m *Manager) Scale(ctx context.Context, name string, component string, replicas int) error {
+// Scale scales a component in the cluster with the specified options
+func (m *Manager) Scale(ctx context.Context, name string, component string, opts executor.ScaleOptions) error {
 	if !m.Exists(name) {
 		return fmt.Errorf("cluster '%s' does not exist", name)
 	}
@@ -388,8 +389,10 @@ func (m *Manager) Scale(ctx context.Context, name string, component string, repl
 		return fmt.Errorf("failed to update metadata: %w", err)
 	}
 
-	logger.Info("Scaling %s to %d replicas in cluster '%s'...", component, replicas, name)
-	if err := exec.Scale(ctx, component, replicas); err != nil {
+	// Log scaling operation details
+	m.logScaleOperation(component, name, opts)
+
+	if err := exec.Scale(ctx, component, opts); err != nil {
 		// Restore old status on failure
 		meta.Status = oldStatus
 		spec.SaveMeta(meta, m.MetaPath(name))
@@ -402,8 +405,31 @@ func (m *Manager) Scale(ctx context.Context, name string, component string, repl
 		return fmt.Errorf("failed to update metadata: %w", err)
 	}
 
-	logger.Success("Scaled %s to %d replicas!", component, replicas)
+	logger.Success("Scaled %s in cluster '%s' successfully!", component, name)
 	return nil
+}
+
+// logScaleOperation logs the details of a scale operation
+func (m *Manager) logScaleOperation(component, clusterName string, opts executor.ScaleOptions) {
+	if opts.HasReplicaChange() {
+		logger.Info("Scaling %s to %d replicas in cluster '%s'...", component, opts.Replicas, clusterName)
+	}
+	if opts.HasResourceChange() {
+		var resources []string
+		if opts.CPURequest != "" {
+			resources = append(resources, fmt.Sprintf("cpu-request=%s", opts.CPURequest))
+		}
+		if opts.CPULimit != "" {
+			resources = append(resources, fmt.Sprintf("cpu-limit=%s", opts.CPULimit))
+		}
+		if opts.MemoryRequest != "" {
+			resources = append(resources, fmt.Sprintf("memory-request=%s", opts.MemoryRequest))
+		}
+		if opts.MemoryLimit != "" {
+			resources = append(resources, fmt.Sprintf("memory-limit=%s", opts.MemoryLimit))
+		}
+		logger.Info("Updating %s resources in cluster '%s': %s", component, clusterName, strings.Join(resources, ", "))
+	}
 }
 
 // GetReplicas returns the current replica count for each component
@@ -431,6 +457,91 @@ func (m *Manager) GetReplicas(ctx context.Context, name string) (map[string]int,
 	}
 
 	return exec.GetReplicas(ctx)
+}
+
+// Upgrade upgrades the cluster to the specified Milvus version
+func (m *Manager) Upgrade(ctx context.Context, name string, version string) error {
+	if !m.Exists(name) {
+		return fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return err
+	}
+
+	exec, err := m.createExecutor(name, specification, DeployOptions{
+		Backend:       meta.Backend,
+		MilvusVersion: meta.MilvusVersion,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Get current version for logging
+	currentVersion, _ := exec.GetVersion(ctx)
+
+	// Update status to upgrading
+	oldStatus := meta.Status
+	meta.Status = spec.StatusUpgrading
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	logger.Info("Upgrading cluster '%s' from %s to %s...", name, currentVersion, version)
+
+	if err := exec.Upgrade(ctx, version); err != nil {
+		// Restore old status on failure
+		meta.Status = oldStatus
+		spec.SaveMeta(meta, m.MetaPath(name))
+		return fmt.Errorf("failed to upgrade: %w", err)
+	}
+
+	// Update metadata with new version
+	// Normalize version format
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+	meta.MilvusVersion = version
+	meta.Status = spec.StatusRunning
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	logger.Success("Cluster '%s' upgraded to %s successfully!", name, version)
+	return nil
+}
+
+// GetVersion returns the current Milvus version for the cluster
+func (m *Manager) GetVersion(ctx context.Context, name string) (string, error) {
+	if !m.Exists(name) {
+		return "", fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return "", err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return "", err
+	}
+
+	exec, err := m.createExecutor(name, specification, DeployOptions{
+		Backend:       meta.Backend,
+		MilvusVersion: meta.MilvusVersion,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return exec.GetVersion(ctx)
 }
 
 // Exists checks if a cluster exists

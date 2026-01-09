@@ -25,11 +25,45 @@ type Executor interface {
 	// Logs retrieves logs from a service
 	Logs(ctx context.Context, service string, tail int) (string, error)
 
-	// Scale scales a component to the specified number of replicas
-	Scale(ctx context.Context, component string, replicas int) error
+	// Scale scales a component with the specified options
+	Scale(ctx context.Context, component string, opts ScaleOptions) error
 
 	// GetReplicas returns the current replica count for each component
 	GetReplicas(ctx context.Context) (map[string]int, error)
+
+	// Upgrade upgrades Milvus to the specified version
+	Upgrade(ctx context.Context, version string) error
+
+	// GetVersion returns the current Milvus version
+	GetVersion(ctx context.Context) (string, error)
+}
+
+// ScaleOptions defines options for scaling a component
+type ScaleOptions struct {
+	// Replicas is the target number of replicas (0 means no change)
+	Replicas int
+
+	// CPURequest is the CPU request (e.g., "2", "500m")
+	CPURequest string
+
+	// CPULimit is the CPU limit (e.g., "4", "1000m")
+	CPULimit string
+
+	// MemoryRequest is the memory request (e.g., "4Gi", "512Mi")
+	MemoryRequest string
+
+	// MemoryLimit is the memory limit (e.g., "8Gi", "1024Mi")
+	MemoryLimit string
+}
+
+// HasReplicaChange returns true if replicas should be changed
+func (o ScaleOptions) HasReplicaChange() bool {
+	return o.Replicas > 0
+}
+
+// HasResourceChange returns true if any resource should be changed
+func (o ScaleOptions) HasResourceChange() bool {
+	return o.CPURequest != "" || o.CPULimit != "" || o.MemoryRequest != "" || o.MemoryLimit != ""
 }
 
 // ComponentNames defines valid component names for scaling

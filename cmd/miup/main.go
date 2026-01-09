@@ -12,6 +12,7 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
+	"github.com/zilliztech/miup/pkg/cluster/executor"
 	"github.com/zilliztech/miup/pkg/cluster/manager"
 	"github.com/zilliztech/miup/pkg/cluster/spec"
 	"github.com/zilliztech/miup/pkg/localdata"
@@ -518,6 +519,7 @@ Examples:
   miup instance stop prod                              Stop an instance
   miup instance scale prod --component querynode --replicas 3   Scale a component
   miup instance replicas prod                          Show current replicas
+  miup instance upgrade prod v2.5.5                    Upgrade to a new version
   miup instance destroy prod                           Destroy an instance`,
 	}
 
@@ -528,6 +530,7 @@ Examples:
 	cmd.AddCommand(newInstanceStopCmd())
 	cmd.AddCommand(newInstanceScaleCmd())
 	cmd.AddCommand(newInstanceReplicasCmd())
+	cmd.AddCommand(newInstanceUpgradeCmd())
 	cmd.AddCommand(newInstanceDestroyCmd())
 	cmd.AddCommand(newInstanceLogsCmd())
 	cmd.AddCommand(newInstanceTemplateCmd())
@@ -761,17 +764,25 @@ func newInstanceStopCmd() *cobra.Command {
 
 func newInstanceScaleCmd() *cobra.Command {
 	var (
-		component string
-		replicas  int
+		component     string
+		replicas      int
+		cpuRequest    string
+		cpuLimit      string
+		memoryRequest string
+		memoryLimit   string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "scale <instance-name>",
 		Short: "Scale a component in the instance",
-		Long: `Scale a Milvus component to the specified number of replicas.
+		Long: `Scale a Milvus component by changing replicas and/or resources.
 
 This command only works with Kubernetes deployments (distributed mode).
 Local deployments (standalone mode) do not support scaling.
+
+You can perform:
+  - Horizontal scaling: change the number of replicas
+  - Vertical scaling: change CPU/memory resources
 
 Available components for distributed mode:
   proxy       Milvus proxy (API gateway)
@@ -784,8 +795,16 @@ Available components for distributed mode:
   indexcoord  Index coordinator
 
 Examples:
+  # Scale replicas (horizontal scaling)
   miup instance scale prod --component querynode --replicas 5
-  miup instance scale prod -c datanode -r 3`,
+  miup instance scale prod -c datanode -r 3
+
+  # Update resources (vertical scaling)
+  miup instance scale prod -c querynode --cpu-request 2 --memory-request 8Gi
+  miup instance scale prod -c querynode --cpu-limit 4 --memory-limit 16Gi
+
+  # Combined scaling (both replicas and resources)
+  miup instance scale prod -c querynode -r 5 --cpu-request 4 --memory-request 16Gi`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			instanceName := args[0]
@@ -793,8 +812,19 @@ Examples:
 			if component == "" {
 				return fmt.Errorf("--component is required")
 			}
-			if replicas < 0 {
-				return fmt.Errorf("--replicas must be >= 0")
+
+			// Build scale options
+			opts := executor.ScaleOptions{
+				Replicas:      replicas,
+				CPURequest:    cpuRequest,
+				CPULimit:      cpuLimit,
+				MemoryRequest: memoryRequest,
+				MemoryLimit:   memoryLimit,
+			}
+
+			// Check that at least one scaling option is specified
+			if !opts.HasReplicaChange() && !opts.HasResourceChange() {
+				return fmt.Errorf("at least one of --replicas, --cpu-request, --cpu-limit, --memory-request, or --memory-limit must be specified")
 			}
 
 			profile, err := localdata.DefaultProfile()
@@ -813,12 +843,16 @@ Examples:
 			}()
 
 			mgr := manager.NewManager(profile)
-			return mgr.Scale(ctx, instanceName, component, replicas)
+			return mgr.Scale(ctx, instanceName, component, opts)
 		},
 	}
 
 	cmd.Flags().StringVarP(&component, "component", "c", "", "Component to scale (required)")
-	cmd.Flags().IntVarP(&replicas, "replicas", "r", 1, "Number of replicas")
+	cmd.Flags().IntVarP(&replicas, "replicas", "r", 0, "Number of replicas (0 means no change)")
+	cmd.Flags().StringVar(&cpuRequest, "cpu-request", "", "CPU request (e.g., '2', '500m')")
+	cmd.Flags().StringVar(&cpuLimit, "cpu-limit", "", "CPU limit (e.g., '4', '1000m')")
+	cmd.Flags().StringVar(&memoryRequest, "memory-request", "", "Memory request (e.g., '4Gi', '512Mi')")
+	cmd.Flags().StringVar(&memoryLimit, "memory-limit", "", "Memory limit (e.g., '8Gi', '1024Mi')")
 	cmd.MarkFlagRequired("component")
 
 	return cmd
@@ -861,6 +895,54 @@ For local deployments, this shows standalone replica count (always 1 when runnin
 			}
 
 			return nil
+		},
+	}
+	return cmd
+}
+
+func newInstanceUpgradeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "upgrade <instance-name> <version>",
+		Short: "Upgrade Milvus to a new version",
+		Long: `Upgrade the Milvus instance to a specified version.
+
+For Kubernetes deployments, this triggers a rolling update managed by the Milvus Operator.
+For local deployments, this pulls the new image and recreates the containers.
+
+The upgrade process:
+  1. Updates the Milvus image version in the deployment
+  2. Performs a rolling update (Kubernetes) or container restart (local)
+  3. Waits for the cluster to become healthy
+
+Examples:
+  # Upgrade to a specific version
+  miup instance upgrade prod v2.5.5
+  miup instance upgrade prod 2.5.5
+
+  # Show current version before upgrading
+  miup instance display prod`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+			version := args[1]
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			mgr := manager.NewManager(profile)
+			return mgr.Upgrade(ctx, instanceName, version)
 		},
 	}
 	return cmd

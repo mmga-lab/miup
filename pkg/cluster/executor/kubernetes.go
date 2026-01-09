@@ -465,101 +465,54 @@ func (e *KubernetesExecutor) GetEndpoint(ctx context.Context) (string, error) {
 	return e.client.GetMilvusService(ctx, e.clusterName, e.namespace)
 }
 
-// Scale scales a component to the specified number of replicas
-func (e *KubernetesExecutor) Scale(ctx context.Context, component string, replicas int) error {
+// Scale scales a component with the specified options (replicas and/or resources)
+func (e *KubernetesExecutor) Scale(ctx context.Context, component string, opts ScaleOptions) error {
 	milvus, err := e.client.GetMilvus(ctx, e.clusterName, e.namespace)
 	if err != nil {
 		return fmt.Errorf("failed to get Milvus cluster: %w", err)
 	}
 
-	// Validate component name and set replicas
-	replicaCount := int32(replicas)
 	component = strings.ToLower(component)
 
-	switch component {
-	case "standalone":
-		if milvus.Spec.Mode != k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale standalone component in cluster mode")
-		}
-		if milvus.Spec.Components.Standalone == nil {
-			milvus.Spec.Components.Standalone = &k8s.ComponentSpec{}
-		}
-		milvus.Spec.Components.Standalone.Replicas = &replicaCount
+	// Get the component spec to modify
+	compSpec, err := e.getComponentSpec(milvus, component)
+	if err != nil {
+		return err
+	}
 
-	case "proxy":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale proxy in standalone mode")
-		}
-		if milvus.Spec.Components.Proxy == nil {
-			milvus.Spec.Components.Proxy = &k8s.ComponentSpec{}
-		}
-		milvus.Spec.Components.Proxy.Replicas = &replicaCount
+	// Apply replica changes
+	if opts.HasReplicaChange() {
+		replicaCount := int32(opts.Replicas)
+		compSpec.Replicas = &replicaCount
+	}
 
-	case "querynode":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale querynode in standalone mode")
+	// Apply resource changes
+	if opts.HasResourceChange() {
+		if compSpec.Resources == nil {
+			compSpec.Resources = &k8s.ResourceRequirements{
+				Requests: make(map[string]string),
+				Limits:   make(map[string]string),
+			}
 		}
-		if milvus.Spec.Components.QueryNode == nil {
-			milvus.Spec.Components.QueryNode = &k8s.ComponentSpec{}
+		if compSpec.Resources.Requests == nil {
+			compSpec.Resources.Requests = make(map[string]string)
 		}
-		milvus.Spec.Components.QueryNode.Replicas = &replicaCount
+		if compSpec.Resources.Limits == nil {
+			compSpec.Resources.Limits = make(map[string]string)
+		}
 
-	case "datanode":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale datanode in standalone mode")
+		if opts.CPURequest != "" {
+			compSpec.Resources.Requests["cpu"] = opts.CPURequest
 		}
-		if milvus.Spec.Components.DataNode == nil {
-			milvus.Spec.Components.DataNode = &k8s.ComponentSpec{}
+		if opts.CPULimit != "" {
+			compSpec.Resources.Limits["cpu"] = opts.CPULimit
 		}
-		milvus.Spec.Components.DataNode.Replicas = &replicaCount
-
-	case "indexnode":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale indexnode in standalone mode")
+		if opts.MemoryRequest != "" {
+			compSpec.Resources.Requests["memory"] = opts.MemoryRequest
 		}
-		if milvus.Spec.Components.IndexNode == nil {
-			milvus.Spec.Components.IndexNode = &k8s.ComponentSpec{}
+		if opts.MemoryLimit != "" {
+			compSpec.Resources.Limits["memory"] = opts.MemoryLimit
 		}
-		milvus.Spec.Components.IndexNode.Replicas = &replicaCount
-
-	case "rootcoord":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale rootcoord in standalone mode")
-		}
-		if milvus.Spec.Components.RootCoord == nil {
-			milvus.Spec.Components.RootCoord = &k8s.ComponentSpec{}
-		}
-		milvus.Spec.Components.RootCoord.Replicas = &replicaCount
-
-	case "querycoord":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale querycoord in standalone mode")
-		}
-		if milvus.Spec.Components.QueryCoord == nil {
-			milvus.Spec.Components.QueryCoord = &k8s.ComponentSpec{}
-		}
-		milvus.Spec.Components.QueryCoord.Replicas = &replicaCount
-
-	case "datacoord":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale datacoord in standalone mode")
-		}
-		if milvus.Spec.Components.DataCoord == nil {
-			milvus.Spec.Components.DataCoord = &k8s.ComponentSpec{}
-		}
-		milvus.Spec.Components.DataCoord.Replicas = &replicaCount
-
-	case "indexcoord":
-		if milvus.Spec.Mode == k8s.MilvusModeStandalone {
-			return fmt.Errorf("cannot scale indexcoord in standalone mode")
-		}
-		if milvus.Spec.Components.IndexCoord == nil {
-			milvus.Spec.Components.IndexCoord = &k8s.ComponentSpec{}
-		}
-		milvus.Spec.Components.IndexCoord.Replicas = &replicaCount
-
-	default:
-		return fmt.Errorf("unknown component: %s. Valid components: proxy, querynode, datanode, indexnode, rootcoord, querycoord, datacoord, indexcoord, standalone", component)
 	}
 
 	// Update the Milvus resource
@@ -569,6 +522,97 @@ func (e *KubernetesExecutor) Scale(ctx context.Context, component string, replic
 
 	// Wait for the cluster to be healthy again
 	return e.waitForReady(ctx, 5*time.Minute)
+}
+
+// getComponentSpec returns the component spec for the given component name
+func (e *KubernetesExecutor) getComponentSpec(milvus *k8s.Milvus, component string) (*k8s.ComponentSpec, error) {
+	isStandalone := milvus.Spec.Mode == k8s.MilvusModeStandalone
+
+	switch component {
+	case "standalone":
+		if !isStandalone {
+			return nil, fmt.Errorf("cannot scale standalone component in cluster mode")
+		}
+		if milvus.Spec.Components.Standalone == nil {
+			milvus.Spec.Components.Standalone = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.Standalone, nil
+
+	case "proxy":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale proxy in standalone mode")
+		}
+		if milvus.Spec.Components.Proxy == nil {
+			milvus.Spec.Components.Proxy = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.Proxy, nil
+
+	case "querynode":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale querynode in standalone mode")
+		}
+		if milvus.Spec.Components.QueryNode == nil {
+			milvus.Spec.Components.QueryNode = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.QueryNode, nil
+
+	case "datanode":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale datanode in standalone mode")
+		}
+		if milvus.Spec.Components.DataNode == nil {
+			milvus.Spec.Components.DataNode = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.DataNode, nil
+
+	case "indexnode":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale indexnode in standalone mode")
+		}
+		if milvus.Spec.Components.IndexNode == nil {
+			milvus.Spec.Components.IndexNode = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.IndexNode, nil
+
+	case "rootcoord":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale rootcoord in standalone mode")
+		}
+		if milvus.Spec.Components.RootCoord == nil {
+			milvus.Spec.Components.RootCoord = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.RootCoord, nil
+
+	case "querycoord":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale querycoord in standalone mode")
+		}
+		if milvus.Spec.Components.QueryCoord == nil {
+			milvus.Spec.Components.QueryCoord = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.QueryCoord, nil
+
+	case "datacoord":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale datacoord in standalone mode")
+		}
+		if milvus.Spec.Components.DataCoord == nil {
+			milvus.Spec.Components.DataCoord = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.DataCoord, nil
+
+	case "indexcoord":
+		if isStandalone {
+			return nil, fmt.Errorf("cannot scale indexcoord in standalone mode")
+		}
+		if milvus.Spec.Components.IndexCoord == nil {
+			milvus.Spec.Components.IndexCoord = &k8s.ComponentSpec{}
+		}
+		return milvus.Spec.Components.IndexCoord, nil
+
+	default:
+		return nil, fmt.Errorf("unknown component: %s. Valid components: proxy, querynode, datanode, indexnode, rootcoord, querycoord, datacoord, indexcoord, standalone", component)
+	}
 }
 
 // GetReplicas returns the current replica count for each component
@@ -596,4 +640,58 @@ func (e *KubernetesExecutor) GetReplicas(ctx context.Context) (map[string]int, e
 	}
 
 	return replicas, nil
+}
+
+// Upgrade upgrades the Milvus cluster to the specified version
+func (e *KubernetesExecutor) Upgrade(ctx context.Context, version string) error {
+	milvus, err := e.client.GetMilvus(ctx, e.clusterName, e.namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get Milvus cluster: %w", err)
+	}
+
+	// Normalize version format
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+
+	// Build the new image name
+	newImage := fmt.Sprintf("milvusdb/milvus:%s", version)
+
+	// Check if already at the target version
+	currentImage := milvus.Spec.Components.Image
+	if currentImage == newImage {
+		return fmt.Errorf("cluster is already running version %s", version)
+	}
+
+	// Update the image
+	milvus.Spec.Components.Image = newImage
+
+	// Update the Milvus resource (this triggers a rolling update by the operator)
+	if err := e.client.UpdateMilvus(ctx, milvus); err != nil {
+		return fmt.Errorf("failed to update Milvus cluster: %w", err)
+	}
+
+	// Wait for the upgrade to complete
+	return e.waitForReady(ctx, 15*time.Minute)
+}
+
+// GetVersion returns the current Milvus version from the CRD
+func (e *KubernetesExecutor) GetVersion(ctx context.Context) (string, error) {
+	milvus, err := e.client.GetMilvus(ctx, e.clusterName, e.namespace)
+	if err != nil {
+		return "", fmt.Errorf("failed to get Milvus cluster: %w", err)
+	}
+
+	image := milvus.Spec.Components.Image
+	if image == "" {
+		return "unknown", nil
+	}
+
+	// Extract version from image (e.g., "milvusdb/milvus:v2.5.4" -> "v2.5.4")
+	parts := strings.Split(image, ":")
+	if len(parts) < 2 {
+		return "latest", nil
+	}
+
+	return parts[len(parts)-1], nil
 }
