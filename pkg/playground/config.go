@@ -5,7 +5,6 @@ type Mode string
 
 const (
 	ModeStandalone Mode = "standalone"
-	ModeCluster    Mode = "cluster"
 )
 
 // Config holds the playground configuration
@@ -13,7 +12,7 @@ type Config struct {
 	// Tag is the unique identifier for this playground instance
 	Tag string
 
-	// Mode is the Milvus deployment mode (standalone or cluster)
+	// Mode is the Milvus deployment mode (standalone only)
 	Mode Mode
 
 	// MilvusVersion is the Milvus version to use
