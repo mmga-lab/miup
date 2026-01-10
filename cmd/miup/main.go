@@ -12,14 +12,15 @@ import (
 	"text/tabwriter"
 
 	"github.com/fatih/color"
-	"github.com/spf13/cobra"
 	"github.com/mmga-lab/miup/pkg/cluster/executor"
 	"github.com/mmga-lab/miup/pkg/cluster/manager"
 	"github.com/mmga-lab/miup/pkg/cluster/spec"
+	"github.com/mmga-lab/miup/pkg/component"
 	"github.com/mmga-lab/miup/pkg/localdata"
 	"github.com/mmga-lab/miup/pkg/logger"
 	"github.com/mmga-lab/miup/pkg/playground"
 	"github.com/mmga-lab/miup/pkg/version"
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,7 +39,7 @@ It provides commands for:
 
 Quick start:
   miup playground start    Start a local Milvus instance for development
-  miup install milvus      Install Milvus component
+  miup install birdwatcher Install Milvus ecosystem tool
   miup instance deploy     Deploy a Milvus instance
 
 For more information, visit: https://github.com/mmga-lab/miup`,
@@ -60,6 +61,7 @@ func init() {
 	rootCmd.AddCommand(newInstallCmd())
 	rootCmd.AddCommand(newUninstallCmd())
 	rootCmd.AddCommand(newListCmd())
+	rootCmd.AddCommand(newRunCmd())
 	rootCmd.AddCommand(newPlaygroundCmd())
 	rootCmd.AddCommand(newClusterCmd())
 	rootCmd.AddCommand(newCompletionCmd())
@@ -88,21 +90,22 @@ func newVersionCmd() *cobra.Command {
 func newInstallCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install <component>[:<version>]",
-		Short: "Install a component",
-		Long: `Install a Milvus component.
+		Short: "Install a Milvus ecosystem tool",
+		Long: `Install a Milvus ecosystem tool from GitHub Releases.
 
 Available components:
-  milvus      Milvus vector database
-  etcd        Distributed key-value store
-  minio       Object storage server
-  pulsar      Message queue (optional)
-  prometheus  Monitoring system
-  grafana     Visualization platform
+  birdwatcher     Milvus diagnostic and debugging tool (milvus-io/birdwatcher)
+  milvus-backup   Milvus backup and restore utility (zilliztech/milvus-backup)
+
+Version specification:
+  - If no version is specified, the latest release will be installed
+  - Use :<version> to install a specific version (e.g., birdwatcher:v1.1.0)
 
 Examples:
-  miup install milvus              Install latest stable Milvus
-  miup install milvus:v2.6.0       Install specific version
-  miup install etcd minio          Install multiple components`,
+  miup install birdwatcher              Install latest birdwatcher
+  miup install birdwatcher:v1.1.0       Install specific version
+  miup install milvus-backup            Install milvus-backup
+  miup install birdwatcher milvus-backup   Install multiple components`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profile, err := localdata.DefaultProfile()
@@ -113,10 +116,23 @@ Examples:
 				return err
 			}
 
-			for _, component := range args {
-				logger.Info("Installing component: %s", component)
-				// TODO: Implement actual installation
-				logger.Success("Component %s installed successfully", component)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			mgr := component.NewManager(profile)
+
+			for _, arg := range args {
+				name, ver := parseComponentArg(arg)
+				if err := mgr.Install(ctx, name, ver); err != nil {
+					return fmt.Errorf("failed to install %s: %w", name, err)
+				}
 			}
 			return nil
 		},
@@ -124,45 +140,66 @@ Examples:
 	return cmd
 }
 
+// parseComponentArg parses "component:version" format
+func parseComponentArg(arg string) (name, version string) {
+	parts := strings.SplitN(arg, ":", 2)
+	name = parts[0]
+	if len(parts) == 2 {
+		version = parts[1]
+	}
+	return
+}
+
 func newUninstallCmd() *cobra.Command {
-	var all bool
 	cmd := &cobra.Command{
-		Use:   "uninstall <component>",
-		Short: "Uninstall a component",
-		Args:  cobra.MinimumNArgs(1),
+		Use:   "uninstall <component>[:<version>]",
+		Short: "Uninstall a Milvus ecosystem tool",
+		Long: `Uninstall a Milvus ecosystem tool.
+
+If no version is specified, all versions of the component will be removed.
+
+Examples:
+  miup uninstall birdwatcher           Uninstall all versions of birdwatcher
+  miup uninstall birdwatcher:v1.1.0    Uninstall specific version`,
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			for _, component := range args {
-				logger.Info("Uninstalling component: %s", component)
-				// TODO: Implement actual uninstallation
-				logger.Success("Component %s uninstalled successfully", component)
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx := context.Background()
+			mgr := component.NewManager(profile)
+
+			for _, arg := range args {
+				name, ver := parseComponentArg(arg)
+				if err := mgr.Uninstall(ctx, name, ver); err != nil {
+					return fmt.Errorf("failed to uninstall %s: %w", name, err)
+				}
 			}
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "Remove all versions of a component")
 	return cmd
 }
 
 func newListCmd() *cobra.Command {
-	var installed, available bool
+	var available bool
 	cmd := &cobra.Command{
-		Use:   "list [component]",
-		Short: "List components",
-		Long: `List installed or available components.
+		Use:   "list",
+		Short: "List installed or available components",
+		Long: `List installed or available Milvus ecosystem tools.
 
 Examples:
   miup list              List all installed components
-  miup list --available  List all available components
-  miup list milvus       List installed versions of milvus`,
+  miup list --available  List all available components`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if available {
 				fmt.Println("Available components:")
-				fmt.Println("  milvus      Milvus vector database")
-				fmt.Println("  etcd        Distributed key-value store")
-				fmt.Println("  minio       Object storage server")
-				fmt.Println("  pulsar      Message queue")
-				fmt.Println("  prometheus  Monitoring system")
-				fmt.Println("  grafana     Visualization platform")
+				for name, def := range component.Registry {
+					fmt.Printf("  %-15s %s (%s)\n", name, def.Description, def.Repo)
+				}
+				fmt.Println("\nInstall with: miup install <component>")
 				return nil
 			}
 
@@ -171,14 +208,91 @@ Examples:
 				return err
 			}
 
-			fmt.Printf("Installed components (in %s):\n", profile.ComponentsDir())
-			// TODO: List actual installed components
-			fmt.Println("  (none)")
+			ctx := context.Background()
+			mgr := component.NewManager(profile)
+
+			components, err := mgr.List(ctx)
+			if err != nil {
+				return err
+			}
+
+			if len(components) == 0 {
+				fmt.Printf("No components installed (in %s)\n", profile.ComponentsDir())
+				fmt.Println("\nAvailable components:")
+				for name := range component.Registry {
+					fmt.Printf("  miup install %s\n", name)
+				}
+				return nil
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "COMPONENT\tVERSION\tINSTALLED\tPATH")
+			for _, meta := range components {
+				for ver, info := range meta.Versions {
+					activeMarker := ""
+					if ver == meta.Active {
+						activeMarker = " (active)"
+					}
+					fmt.Fprintf(w, "%s\t%s%s\t%s\t%s\n",
+						meta.Name,
+						ver,
+						activeMarker,
+						info.InstalledAt.Format("2006-01-02"),
+						info.BinaryPath,
+					)
+				}
+			}
+			w.Flush()
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&installed, "installed", false, "List installed components (default)")
 	cmd.Flags().BoolVar(&available, "available", false, "List available components")
+	return cmd
+}
+
+func newRunCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "run <component>[:<version>] [-- args...]",
+		Short: "Run an installed component",
+		Long: `Run an installed Milvus ecosystem tool.
+
+If no version is specified, the active (most recently installed) version is used.
+Use -- to separate miup flags from component arguments.
+
+Examples:
+  miup run birdwatcher                      Run birdwatcher (active version)
+  miup run birdwatcher:v1.1.0               Run specific version
+  miup run birdwatcher -- connect etcd      Pass arguments to birdwatcher`,
+		Args: cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			// Parse component and version
+			name, ver := parseComponentArg(args[0])
+
+			// Args after -- are passed to the component
+			componentArgs := args[1:]
+			if cmd.ArgsLenAtDash() > 0 {
+				componentArgs = args[cmd.ArgsLenAtDash():]
+			}
+
+			mgr := component.NewManager(profile)
+			return mgr.Run(ctx, name, ver, componentArgs)
+		},
+	}
 	return cmd
 }
 
@@ -209,7 +323,6 @@ Examples:
 
 func newPlaygroundStartCmd() *cobra.Command {
 	var (
-		mode        string
 		tag         string
 		withMonitor bool
 		milvusVer   string
@@ -218,7 +331,7 @@ func newPlaygroundStartCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "start",
-		Short: "Start a local Milvus playground",
+		Short: "Start a local Milvus playground (standalone mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			profile, err := localdata.DefaultProfile()
 			if err != nil {
@@ -233,21 +346,9 @@ func newPlaygroundStartCmd() *cobra.Command {
 				tag = "default"
 			}
 
-			// Parse mode
-			var playgroundMode playground.Mode
-			switch mode {
-			case "standalone":
-				playgroundMode = playground.ModeStandalone
-			case "cluster":
-				playgroundMode = playground.ModeCluster
-			default:
-				return fmt.Errorf("invalid mode: %s (must be 'standalone' or 'cluster')", mode)
-			}
-
 			// Create configuration
 			cfg := playground.DefaultConfig()
 			cfg.Tag = tag
-			cfg.Mode = playgroundMode
 			cfg.WithMonitor = withMonitor
 			if milvusVer != "latest" && milvusVer != "" {
 				cfg.MilvusVersion = milvusVer
@@ -292,7 +393,6 @@ func newPlaygroundStartCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&mode, "mode", "standalone", "Milvus mode: standalone or cluster")
 	cmd.Flags().StringVar(&tag, "tag", "default", "Tag name for the playground instance")
 	cmd.Flags().BoolVar(&withMonitor, "with-monitor", false, "Start with Prometheus and Grafana")
 	cmd.Flags().StringVar(&milvusVer, "milvus.version", "latest", "Milvus version to use")
@@ -507,14 +607,12 @@ func newClusterCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "instance",
 		Short: "Manage Milvus instances",
-		Long: `Instance provides commands for deploying and managing Milvus instances.
+		Long: `Instance provides commands for deploying and managing Milvus instances on Kubernetes.
 
-Local deployment uses Docker Compose (standalone mode only).
 Kubernetes deployment uses Milvus Operator (supports standalone and distributed modes).
 
 Examples:
-  miup instance deploy prod topology.yaml              Deploy locally with Docker
-  miup instance deploy prod topology.yaml --kubernetes Deploy to Kubernetes
+  miup instance deploy prod topology.yaml              Deploy to Kubernetes
   miup instance list                                   List all instances
   miup instance display prod                           Show instance details
   miup instance start prod                             Start an instance
@@ -547,7 +645,6 @@ Examples:
 
 func newInstanceDeployCmd() *cobra.Command {
 	var (
-		kubernetes    bool
 		skipConfirm   bool
 		milvusVersion string
 		kubeconfig    string
@@ -558,7 +655,7 @@ func newInstanceDeployCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "deploy <instance-name> <topology.yaml>",
-		Short: "Deploy a Milvus instance",
+		Short: "Deploy a Milvus instance to Kubernetes",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			instanceName := args[0]
@@ -570,11 +667,6 @@ func newInstanceDeployCmd() *cobra.Command {
 			}
 			if err := profile.InitProfile(); err != nil {
 				return err
-			}
-
-			backend := spec.BackendLocal
-			if kubernetes {
-				backend = spec.BackendKubernetes
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
@@ -590,7 +682,6 @@ func newInstanceDeployCmd() *cobra.Command {
 			mgr := manager.NewManager(profile)
 			opts := manager.DeployOptions{
 				MilvusVersion: milvusVersion,
-				Backend:       backend,
 				SkipConfirm:   skipConfirm,
 				Kubeconfig:    kubeconfig,
 				KubeContext:   kubecontext,
@@ -605,27 +696,22 @@ func newInstanceDeployCmd() *cobra.Command {
 			// Print connection info
 			info, _ := mgr.Display(ctx, instanceName)
 			if info != nil && info.Meta != nil {
+				ns := namespace
+				if ns == "" {
+					ns = info.Meta.Namespace
+				}
 				fmt.Println()
 				fmt.Println("Connect to Milvus:")
-				if kubernetes {
-					fmt.Printf("  %s\n", color.CyanString("Namespace: %s", namespace))
-					fmt.Printf("  %s\n", color.CyanString("Use: kubectl port-forward svc/%s-milvus -n %s 19530:19530", instanceName, namespace))
-				} else {
-					fmt.Printf("  %s\n", color.CyanString("Endpoint: localhost:%d", info.Meta.MilvusPort))
-				}
+				fmt.Printf("  %s\n", color.CyanString("Namespace: %s", ns))
+				fmt.Printf("  %s\n", color.CyanString("Use: kubectl port-forward svc/%s-milvus -n %s 19530:19530", instanceName, ns))
 				fmt.Printf("  %s\n", color.CyanString("SDK:      from pymilvus import MilvusClient"))
 				fmt.Printf("  %s\n", color.CyanString("          client = MilvusClient('http://localhost:19530')"))
-				if !kubernetes && info.Meta.MinioConsole > 0 {
-					fmt.Println()
-					fmt.Printf("MinIO Console: %s\n", color.CyanString("http://localhost:%d", info.Meta.MinioConsole))
-				}
 			}
 
 			return nil
 		},
 	}
 
-	cmd.Flags().BoolVar(&kubernetes, "kubernetes", false, "Deploy to Kubernetes using Milvus Operator")
 	cmd.Flags().BoolVarP(&skipConfirm, "yes", "y", false, "Skip confirmation")
 	cmd.Flags().StringVar(&milvusVersion, "milvus.version", "v2.5.4", "Milvus version to use")
 	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file (defaults to ~/.kube/config)")
@@ -1022,48 +1108,32 @@ func newInstanceLogsCmd() *cobra.Command {
 
 func newInstanceTemplateCmd() *cobra.Command {
 	var (
-		mode       string
-		kubernetes bool
-		withTLS    bool
+		mode    string
+		withTLS bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "template",
 		Short: "Print instance topology template",
-		Long: `Print a topology template for deploying Milvus instances.
-
-Local deployment (Docker) only supports standalone mode.
-Kubernetes deployment supports both standalone and distributed modes.
+		Long: `Print a topology template for deploying Milvus instances on Kubernetes.
 
 Examples:
-  miup instance template                              Local standalone template
-  miup instance template --tls                        Local standalone with TLS
-  miup instance template --kubernetes                 K8s standalone template
-  miup instance template --kubernetes --tls           K8s standalone with TLS
-  miup instance template --kubernetes --mode cluster  K8s distributed template`,
+  miup instance template                    Standalone template
+  miup instance template --tls              Standalone with TLS
+  miup instance template --mode distributed Distributed template`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if kubernetes {
-				if withTLS {
-					fmt.Print(kubernetesTLSTemplate)
-				} else if mode == "distributed" {
-					fmt.Print(kubernetesDistributedTemplate)
-				} else {
-					fmt.Print(kubernetesStandaloneTemplate)
-				}
+			if withTLS {
+				fmt.Print(kubernetesTLSTemplate)
+			} else if mode == "distributed" {
+				fmt.Print(kubernetesDistributedTemplate)
 			} else {
-				// Local only supports standalone
-				if withTLS {
-					fmt.Print(localTLSTemplate)
-				} else {
-					fmt.Print(localStandaloneTemplate)
-				}
+				fmt.Print(kubernetesStandaloneTemplate)
 			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&mode, "mode", "standalone", "Kubernetes mode: standalone or distributed")
-	cmd.Flags().BoolVar(&kubernetes, "kubernetes", false, "Print Kubernetes deployment template")
+	cmd.Flags().StringVar(&mode, "mode", "standalone", "Deployment mode: standalone or distributed")
 	cmd.Flags().BoolVar(&withTLS, "tls", false, "Include TLS configuration in template")
 
 	return cmd
@@ -1084,38 +1154,8 @@ func formatClusterStatus(status spec.ClusterStatus) string {
 	}
 }
 
-const localStandaloneTemplate = `# MiUp Local Instance - Standalone Mode (Docker Compose)
-# Deploy with: miup instance deploy <instance-name> <this-file>
-
-milvus_servers:
-  - host: 127.0.0.1
-    port: 19530
-    mode: standalone
-
-etcd_servers:
-  - host: 127.0.0.1
-    client_port: 2379
-
-minio_servers:
-  - host: 127.0.0.1
-    port: 9000
-    console_port: 9001
-    access_key: "minioadmin"
-    secret_key: "minioadmin"
-
-# Optional: Monitoring
-# monitoring_servers:
-#   - host: 127.0.0.1
-#     prometheus_port: 9090
-
-# grafana_servers:
-#   - host: 127.0.0.1
-#     port: 3000
-#     admin_password: "admin"
-`
-
 const kubernetesStandaloneTemplate = `# MiUp Kubernetes Topology - Standalone Mode
-# Deploy with: miup instance deploy <instance-name> <this-file> --kubernetes
+# Deploy with: miup instance deploy <instance-name> <this-file>
 # Requires: Milvus Operator installed in your Kubernetes cluster
 
 global:
@@ -1141,7 +1181,7 @@ minio_servers:
 `
 
 const kubernetesDistributedTemplate = `# MiUp Kubernetes Topology - Distributed Mode
-# Deploy with: miup instance deploy <instance-name> <this-file> --kubernetes
+# Deploy with: miup instance deploy <instance-name> <this-file>
 # Requires: Milvus Operator installed in your Kubernetes cluster
 
 global:
@@ -1205,39 +1245,6 @@ minio_servers:
 #     port: 9000
 #     access_key: "your-access-key"
 #     secret_key: "your-secret-key"
-`
-
-const localTLSTemplate = `# MiUp Local Instance - Standalone Mode with TLS (Docker Compose)
-# Deploy with: miup instance deploy <instance-name> <this-file>
-#
-# Before deploying, create TLS certificates:
-#   1. Generate certificates (server.pem, server.key, ca.pem)
-#   2. Update the paths below to point to your certificate files
-
-global:
-  tls:
-    enabled: true
-    mode: 1  # 1 = one-way TLS, 2 = two-way TLS (mutual TLS)
-    cert_file: "/path/to/server.pem"
-    key_file: "/path/to/server.key"
-    ca_file: "/path/to/ca.pem"
-    # internal_enabled: false  # Enable TLS for internal component communication
-
-milvus_servers:
-  - host: 127.0.0.1
-    port: 19530
-    mode: standalone
-
-etcd_servers:
-  - host: 127.0.0.1
-    client_port: 2379
-
-minio_servers:
-  - host: 127.0.0.1
-    port: 9000
-    console_port: 9001
-    access_key: "minioadmin"
-    secret_key: "minioadmin"
 `
 
 func newCompletionCmd() *cobra.Command {
@@ -1614,7 +1621,7 @@ func tagAndPushImage(source, target string) error {
 }
 
 const kubernetesTLSTemplate = `# MiUp Kubernetes Topology - Standalone Mode with TLS
-# Deploy with: miup instance deploy <instance-name> <this-file> --kubernetes
+# Deploy with: miup instance deploy <instance-name> <this-file>
 # Requires: Milvus Operator installed in your Kubernetes cluster
 #
 # Before deploying, create TLS secret:

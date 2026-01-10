@@ -20,7 +20,6 @@ const (
 type BackendType string
 
 const (
-	BackendLocal      BackendType = "local"
 	BackendKubernetes BackendType = "kubernetes"
 )
 

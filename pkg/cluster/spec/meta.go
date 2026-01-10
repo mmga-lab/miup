@@ -76,12 +76,12 @@ func LoadMeta(path string) (*ClusterMeta, error) {
 }
 
 // NewClusterMeta creates a new cluster metadata from specification
-func NewClusterMeta(name string, spec *Specification, backend BackendType, milvusVersion string) *ClusterMeta {
+func NewClusterMeta(name string, spec *Specification, milvusVersion string) *ClusterMeta {
 	meta := &ClusterMeta{
 		Name:          name,
 		Version:       "1.0",
 		Mode:          spec.GetMode(),
-		Backend:       backend,
+		Backend:       BackendKubernetes,
 		Status:        StatusDeploying,
 		MilvusVersion: milvusVersion,
 		CreatedAt:     time.Now(),
