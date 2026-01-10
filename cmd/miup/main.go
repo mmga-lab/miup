@@ -10,8 +10,10 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/fatih/color"
+	"github.com/mmga-lab/miup/pkg/audit"
 	"github.com/mmga-lab/miup/pkg/check"
 	"github.com/mmga-lab/miup/pkg/cluster/executor"
 	"github.com/mmga-lab/miup/pkg/cluster/manager"
@@ -24,6 +26,34 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
+
+// auditLog logs an operation to the audit log
+func auditLog(instance, command string, args []string, err error, duration time.Duration) {
+	logger, logErr := audit.NewLogger()
+	if logErr != nil {
+		// Silently ignore audit log errors - don't fail the main operation
+		return
+	}
+
+	status := audit.StatusSuccess
+	errMsg := ""
+	if err != nil {
+		status = audit.StatusFailed
+		errMsg = err.Error()
+	}
+
+	entry := &audit.Entry{
+		Instance: instance,
+		Command:  command,
+		Args:     args,
+		Status:   status,
+		Duration: duration,
+		Error:    errMsg,
+	}
+
+	// Ignore errors from logging - don't fail the main operation
+	_ = logger.Log(entry)
+}
 
 var (
 	verbose bool
@@ -629,6 +659,7 @@ Examples:
 	}
 
 	cmd.AddCommand(newInstanceCheckCmd())
+	cmd.AddCommand(newInstanceAuditCmd())
 	cmd.AddCommand(newInstanceDeployCmd())
 	cmd.AddCommand(newInstanceListCmd())
 	cmd.AddCommand(newInstanceDisplayCmd())
@@ -692,8 +723,11 @@ func newInstanceDeployCmd() *cobra.Command {
 				WithMonitor:   withMonitor,
 			}
 
-			if err := mgr.Deploy(ctx, instanceName, topoFile, opts); err != nil {
-				return err
+			start := time.Now()
+			deployErr := mgr.Deploy(ctx, instanceName, topoFile, opts)
+			auditLog(instanceName, "deploy", []string{topoFile}, deployErr, time.Since(start))
+			if deployErr != nil {
+				return deployErr
 			}
 
 			// Print connection info
@@ -829,7 +863,10 @@ func newInstanceStartCmd() *cobra.Command {
 			defer cancel()
 
 			mgr := manager.NewManager(profile)
-			return mgr.Start(ctx, instanceName)
+			start := time.Now()
+			startErr := mgr.Start(ctx, instanceName)
+			auditLog(instanceName, "start", nil, startErr, time.Since(start))
+			return startErr
 		},
 	}
 	return cmd
@@ -852,7 +889,10 @@ func newInstanceStopCmd() *cobra.Command {
 			defer cancel()
 
 			mgr := manager.NewManager(profile)
-			return mgr.Stop(ctx, instanceName)
+			start := time.Now()
+			stopErr := mgr.Stop(ctx, instanceName)
+			auditLog(instanceName, "stop", nil, stopErr, time.Since(start))
+			return stopErr
 		},
 	}
 	return cmd
@@ -939,7 +979,14 @@ Examples:
 			}()
 
 			mgr := manager.NewManager(profile)
-			return mgr.Scale(ctx, instanceName, component, opts)
+			start := time.Now()
+			scaleArgs := []string{fmt.Sprintf("--component=%s", component)}
+			if opts.HasReplicaChange() {
+				scaleArgs = append(scaleArgs, fmt.Sprintf("--replicas=%d", replicas))
+			}
+			scaleErr := mgr.Scale(ctx, instanceName, component, opts)
+			auditLog(instanceName, "scale", scaleArgs, scaleErr, time.Since(start))
+			return scaleErr
 		},
 	}
 
@@ -1038,7 +1085,10 @@ Examples:
 			}()
 
 			mgr := manager.NewManager(profile)
-			return mgr.Upgrade(ctx, instanceName, version)
+			start := time.Now()
+			upgradeErr := mgr.Upgrade(ctx, instanceName, version)
+			auditLog(instanceName, "upgrade", []string{version}, upgradeErr, time.Since(start))
+			return upgradeErr
 		},
 	}
 	return cmd
@@ -1063,7 +1113,10 @@ func newInstanceDestroyCmd() *cobra.Command {
 			defer cancel()
 
 			mgr := manager.NewManager(profile)
-			return mgr.Destroy(ctx, instanceName, force)
+			start := time.Now()
+			destroyErr := mgr.Destroy(ctx, instanceName, force)
+			auditLog(instanceName, "destroy", nil, destroyErr, time.Since(start))
+			return destroyErr
 		},
 	}
 
@@ -2436,6 +2489,148 @@ func printCheckReport(report *check.Report) error {
 
 func printCheckJSON(report *check.Report) error {
 	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to format JSON: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+func newInstanceAuditCmd() *cobra.Command {
+	var (
+		instance   string
+		command    string
+		limit      int
+		outputJSON bool
+		clear      bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "audit",
+		Short: "View operation audit logs",
+		Long: `View audit logs of instance management operations.
+
+The audit log records all instance operations including:
+  - deploy, start, stop, destroy
+  - scale, upgrade
+  - config changes
+  - diagnose
+
+Each entry includes timestamp, user, command, status, and duration.
+
+Examples:
+  miup instance audit                          Show last 20 audit entries
+  miup instance audit --limit 50               Show last 50 entries
+  miup instance audit --instance prod          Filter by instance name
+  miup instance audit --command deploy         Filter by command
+  miup instance audit --json                   Output in JSON format
+  miup instance audit --clear                  Clear audit logs`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			logger, err := audit.NewLogger()
+			if err != nil {
+				return fmt.Errorf("failed to initialize audit logger: %w", err)
+			}
+
+			if clear {
+				if err := logger.Clear(); err != nil {
+					return fmt.Errorf("failed to clear audit logs: %w", err)
+				}
+				fmt.Println("Audit logs cleared.")
+				return nil
+			}
+
+			// Set default limit
+			if limit <= 0 {
+				limit = 20
+			}
+
+			entries, err := logger.Query(audit.QueryOptions{
+				Instance: instance,
+				Command:  command,
+				Limit:    limit,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to query audit logs: %w", err)
+			}
+
+			if len(entries) == 0 {
+				fmt.Println("No audit logs found.")
+				return nil
+			}
+
+			if outputJSON {
+				return printAuditJSON(entries)
+			}
+
+			return printAuditTable(entries)
+		},
+	}
+
+	cmd.Flags().StringVarP(&instance, "instance", "i", "", "Filter by instance name")
+	cmd.Flags().StringVarP(&command, "command", "c", "", "Filter by command")
+	cmd.Flags().IntVarP(&limit, "limit", "n", 20, "Number of entries to show")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+	cmd.Flags().BoolVar(&clear, "clear", false, "Clear all audit logs")
+
+	return cmd
+}
+
+func printAuditTable(entries []audit.Entry) error {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TIMESTAMP\tINSTANCE\tCOMMAND\tSTATUS\tDURATION\tUSER")
+	fmt.Fprintln(w, "---------\t--------\t-------\t------\t--------\t----")
+
+	for _, e := range entries {
+		var statusStr string
+		switch e.Status {
+		case audit.StatusSuccess:
+			statusStr = color.GreenString("success")
+		case audit.StatusFailed:
+			statusStr = color.RedString("failed")
+		case audit.StatusRunning:
+			statusStr = color.YellowString("running")
+		default:
+			statusStr = string(e.Status)
+		}
+
+		instance := e.Instance
+		if instance == "" {
+			instance = "-"
+		}
+
+		duration := "-"
+		if e.Duration > 0 {
+			duration = e.Duration.Round(time.Millisecond).String()
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			e.Timestamp.Format("2006-01-02 15:04:05"),
+			instance,
+			e.Command,
+			statusStr,
+			duration,
+			e.User,
+		)
+	}
+
+	w.Flush()
+
+	// Show error details for failed entries
+	for _, e := range entries {
+		if e.Status == audit.StatusFailed && e.Error != "" {
+			fmt.Printf("\n%s %s failed: %s\n",
+				color.RedString("[ERROR]"),
+				e.Command,
+				e.Error,
+			)
+		}
+	}
+
+	return nil
+}
+
+func printAuditJSON(entries []audit.Entry) error {
+	data, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to format JSON: %w", err)
 	}

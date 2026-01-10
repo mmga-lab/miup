@@ -110,6 +110,7 @@ miup instance scale my-instance --component querynode --replicas 3
 | Command | Description |
 |---------|-------------|
 | `miup instance check` | Pre-deployment environment check |
+| `miup instance audit` | View operation audit logs |
 | `miup instance deploy` | Deploy a Milvus instance |
 | `miup instance list` | List all instances |
 | `miup instance display` | Show instance details |
