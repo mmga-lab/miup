@@ -26,7 +26,9 @@ func TestKubernetesExecutor_Integration(t *testing.T) {
 		t.Skip("kubeconfig not found, skipping integration test")
 	}
 
-	client, err := k8s.NewClient(kubeconfig)
+	client, err := k8s.NewClient(k8s.ClientOptions{
+		Kubeconfig: kubeconfig,
+	})
 	if err != nil {
 		t.Fatalf("Failed to create k8s client: %v", err)
 	}
@@ -36,7 +38,7 @@ func TestKubernetesExecutor_Integration(t *testing.T) {
 	defer cancel()
 
 	// Verify we can connect to the cluster
-	_, err = client.GetMilvusList(ctx, "default")
+	_, err = client.ListMilvus(ctx, "default")
 	if err != nil {
 		t.Fatalf("Failed to list Milvus resources: %v", err)
 	}
@@ -52,28 +54,31 @@ func TestKubernetesExecutor_DeployStandalone(t *testing.T) {
 		t.Skip("kubeconfig not found, skipping integration test")
 	}
 
-	client, err := k8s.NewClient(kubeconfig)
-	if err != nil {
-		t.Fatalf("Failed to create k8s client: %v", err)
-	}
-
 	testName := "miup-test-" + time.Now().Format("150405")
 	namespace := "default"
 
 	topology := &spec.Specification{
-		GlobalOptions: spec.GlobalOptions{
-			Mode:      "standalone",
+		Global: spec.GlobalOptions{
 			Namespace: namespace,
 		},
-		MilvusServers: []*spec.MilvusSpec{
+		MilvusServers: []spec.MilvusSpec{
 			{
-				Host:    testName,
-				Version: "v2.5.4",
+				Host: testName,
+				Mode: spec.ModeStandalone,
 			},
 		},
 	}
 
-	executor := NewKubernetesExecutor(client, testName, namespace, topology)
+	executor, err := NewKubernetesExecutor(KubernetesOptions{
+		Kubeconfig:    kubeconfig,
+		Namespace:     namespace,
+		ClusterName:   testName,
+		Spec:          topology,
+		MilvusVersion: "v2.5.4",
+	})
+	if err != nil {
+		t.Fatalf("Failed to create executor: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -143,7 +148,9 @@ func TestKubernetesExecutor_MilvusOperatorExists(t *testing.T) {
 		t.Skip("kubeconfig not found, skipping integration test")
 	}
 
-	client, err := k8s.NewClient(kubeconfig)
+	client, err := k8s.NewClient(k8s.ClientOptions{
+		Kubeconfig: kubeconfig,
+	})
 	if err != nil {
 		t.Fatalf("Failed to create k8s client: %v", err)
 	}
@@ -152,7 +159,7 @@ func TestKubernetesExecutor_MilvusOperatorExists(t *testing.T) {
 	defer cancel()
 
 	// Check if Milvus CRD is installed
-	_, err = client.GetMilvusList(ctx, "default")
+	_, err = client.ListMilvus(ctx, "default")
 	if err != nil {
 		t.Logf("Milvus Operator may not be installed: %v", err)
 		t.Skip("Milvus Operator not installed")
