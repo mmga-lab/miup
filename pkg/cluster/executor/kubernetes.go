@@ -951,3 +951,58 @@ func (e *KubernetesExecutor) diagnoseConditions(milvus *k8s.Milvus, result *Diag
 		}
 	}
 }
+
+// Reload triggers a configuration reload on the Milvus cluster
+func (e *KubernetesExecutor) Reload(ctx context.Context, opts ReloadOptions) error {
+	milvus, err := e.client.GetMilvus(ctx, e.clusterName, e.namespace)
+	if err != nil {
+		return fmt.Errorf("failed to get Milvus cluster: %w", err)
+	}
+
+	// If config is provided, merge it first
+	if len(opts.Config) > 0 {
+		if milvus.Spec.Config == nil {
+			milvus.Spec.Config = make(map[string]any)
+		}
+		mergeConfigAny(milvus.Spec.Config, opts.Config)
+	}
+
+	// Add/update annotation to trigger Operator reconciliation
+	if milvus.ObjectMeta.Annotations == nil {
+		milvus.ObjectMeta.Annotations = make(map[string]string)
+	}
+	milvus.ObjectMeta.Annotations["milvus.io/reload-at"] = time.Now().Format(time.RFC3339)
+
+	// Update the Milvus resource
+	if err := e.client.UpdateMilvus(ctx, milvus); err != nil {
+		return fmt.Errorf("failed to update Milvus cluster: %w", err)
+	}
+
+	// Wait for the cluster to be ready if requested
+	if opts.Wait {
+		timeout := opts.Timeout
+		if timeout == 0 {
+			timeout = 10 * time.Minute
+		}
+		return e.waitForReady(ctx, timeout)
+	}
+
+	return nil
+}
+
+// mergeConfigAny deep merges src into dst (with any type)
+func mergeConfigAny(dst, src map[string]any) {
+	for key, srcVal := range src {
+		if dstVal, exists := dst[key]; exists {
+			// If both are maps, merge recursively
+			srcMap, srcIsMap := srcVal.(map[string]any)
+			dstMap, dstIsMap := dstVal.(map[string]any)
+			if srcIsMap && dstIsMap {
+				mergeConfigAny(dstMap, srcMap)
+				continue
+			}
+		}
+		// Otherwise, overwrite
+		dst[key] = srcVal
+	}
+}

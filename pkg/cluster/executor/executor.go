@@ -1,6 +1,9 @@
 package executor
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Executor defines the interface for cluster execution backends
 type Executor interface {
@@ -45,6 +48,23 @@ type Executor interface {
 
 	// Diagnose performs health diagnostics on the cluster
 	Diagnose(ctx context.Context) (*DiagnoseResult, error)
+
+	// Reload triggers a configuration reload
+	// If config is provided, it merges the config before reloading
+	// If wait is true, it waits for all pods to become ready
+	Reload(ctx context.Context, opts ReloadOptions) error
+}
+
+// ReloadOptions defines options for reloading configuration
+type ReloadOptions struct {
+	// Config is the configuration to merge before reloading (optional)
+	Config map[string]any
+
+	// Wait indicates whether to wait for pods to become ready
+	Wait bool
+
+	// Timeout is the maximum time to wait for reload to complete
+	Timeout time.Duration
 }
 
 // DiagnoseResult contains the results of a health diagnosis

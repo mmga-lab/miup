@@ -16,6 +16,7 @@ const (
 	StatusStopped   ClusterStatus = "stopped"
 	StatusUpgrading ClusterStatus = "upgrading"
 	StatusScaling   ClusterStatus = "scaling"
+	StatusReloading ClusterStatus = "reloading"
 	StatusUnknown   ClusterStatus = "unknown"
 )
 

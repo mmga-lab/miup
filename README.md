@@ -126,6 +126,7 @@ miup instance scale my-instance --component querynode --replicas 3
 | `miup instance config set` | Set configuration value |
 | `miup instance config import` | Import configuration from file |
 | `miup instance config export` | Export configuration to stdout |
+| `miup instance reload` | Reload configuration (trigger Operator reconciliation) |
 | `miup instance template` | Print topology template |
 
 ### Image Mirror (Offline Deployment)

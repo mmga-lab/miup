@@ -669,6 +669,7 @@ Examples:
 	cmd.AddCommand(newInstanceReplicasCmd())
 	cmd.AddCommand(newInstanceUpgradeCmd())
 	cmd.AddCommand(newInstanceConfigCmd())
+	cmd.AddCommand(newInstanceReloadCmd())
 	cmd.AddCommand(newInstanceDiagnoseCmd())
 	cmd.AddCommand(newInstanceDestroyCmd())
 	cmd.AddCommand(newInstanceLogsCmd())
@@ -2245,6 +2246,89 @@ Examples:
 			return nil
 		},
 	}
+
+	return cmd
+}
+
+func newInstanceReloadCmd() *cobra.Command {
+	var (
+		configFile string
+		wait       bool
+		timeout    time.Duration
+	)
+
+	cmd := &cobra.Command{
+		Use:   "reload <instance-name>",
+		Short: "Reload configuration for an instance",
+		Long: `Trigger a configuration reload on a Milvus instance.
+
+This command updates the Milvus CR annotation to trigger the Milvus Operator
+to reconcile and apply any pending configuration changes.
+
+If --config is specified, the configuration file is imported before triggering
+the reload.
+
+Examples:
+  # Reload configuration (trigger Operator reconciliation)
+  miup instance reload prod
+
+  # Import config file and reload
+  miup instance reload prod --config config.yaml
+
+  # Reload and wait for all pods to be ready
+  miup instance reload prod --wait
+
+  # Reload with custom timeout
+  miup instance reload prod --wait --timeout 15m`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			instanceName := args[0]
+
+			profile, err := localdata.DefaultProfile()
+			if err != nil {
+				return err
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+			}()
+
+			// Load config from file if specified
+			var config map[string]any
+			if configFile != "" {
+				data, err := os.ReadFile(configFile)
+				if err != nil {
+					return fmt.Errorf("failed to read config file: %w", err)
+				}
+				if err := yaml.Unmarshal(data, &config); err != nil {
+					return fmt.Errorf("failed to parse config file: %w", err)
+				}
+			}
+
+			mgr := manager.NewManager(profile)
+			opts := manager.ReloadOptions{
+				ConfigFile: configFile,
+				Config:     config,
+				Wait:       wait,
+				Timeout:    timeout,
+			}
+
+			start := time.Now()
+			reloadErr := mgr.Reload(ctx, instanceName, opts)
+			auditLog(instanceName, "reload", nil, reloadErr, time.Since(start))
+			return reloadErr
+		},
+	}
+
+	cmd.Flags().StringVarP(&configFile, "config", "c", "", "Path to config file to import before reloading")
+	cmd.Flags().BoolVar(&wait, "wait", false, "Wait for all pods to become ready after reload")
+	cmd.Flags().DurationVar(&timeout, "timeout", 10*time.Minute, "Timeout when waiting for reload to complete")
 
 	return cmd
 }

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mmga-lab/miup/pkg/cluster/executor"
 	"github.com/mmga-lab/miup/pkg/cluster/spec"
@@ -576,6 +577,73 @@ func (m *Manager) SetConfig(ctx context.Context, name string, config map[string]
 	}
 
 	logger.Success("Configuration updated for cluster '%s'!", name)
+	return nil
+}
+
+// ReloadOptions contains options for reloading configuration
+type ReloadOptions struct {
+	// ConfigFile is the path to a config file to import before reloading
+	ConfigFile string
+	// Config is the configuration to merge before reloading
+	Config map[string]any
+	// Wait indicates whether to wait for pods to become ready
+	Wait bool
+	// Timeout is the maximum time to wait for reload to complete
+	Timeout time.Duration
+}
+
+// Reload triggers a configuration reload on the cluster
+func (m *Manager) Reload(ctx context.Context, name string, opts ReloadOptions) error {
+	if !m.Exists(name) {
+		return fmt.Errorf("cluster '%s' does not exist", name)
+	}
+
+	meta, err := spec.LoadMeta(m.MetaPath(name))
+	if err != nil {
+		return err
+	}
+
+	specification, err := spec.LoadSpecification(m.TopologyPath(name))
+	if err != nil {
+		return err
+	}
+
+	exec, err := m.createExecutor(name, specification, m.buildDeployOptions(meta))
+	if err != nil {
+		return err
+	}
+
+	// Update status to reloading
+	oldStatus := meta.Status
+	meta.Status = spec.StatusReloading
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	logger.Info("Reloading configuration for cluster '%s'...", name)
+
+	execOpts := executor.ReloadOptions{
+		Config:  opts.Config,
+		Wait:    opts.Wait,
+		Timeout: opts.Timeout,
+	}
+
+	if err := exec.Reload(ctx, execOpts); err != nil {
+		// Restore old status on failure
+		meta.Status = oldStatus
+		if saveErr := spec.SaveMeta(meta, m.MetaPath(name)); saveErr != nil {
+			logger.Warn("Failed to restore metadata status: %v", saveErr)
+		}
+		return fmt.Errorf("failed to reload: %w", err)
+	}
+
+	// Update status back to running
+	meta.Status = spec.StatusRunning
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	logger.Success("Configuration reloaded for cluster '%s'!", name)
 	return nil
 }
 
