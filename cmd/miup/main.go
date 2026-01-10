@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/fatih/color"
+	"github.com/mmga-lab/miup/pkg/check"
 	"github.com/mmga-lab/miup/pkg/cluster/executor"
 	"github.com/mmga-lab/miup/pkg/cluster/manager"
 	"github.com/mmga-lab/miup/pkg/cluster/spec"
@@ -623,9 +624,11 @@ Examples:
   miup instance config show prod                       Show configuration
   miup instance config set prod key=value              Set configuration
   miup instance diagnose prod                          Health diagnostics
-  miup instance destroy prod                           Destroy an instance`,
+  miup instance destroy prod                           Destroy an instance
+  miup instance check                                  Pre-deployment environment check`,
 	}
 
+	cmd.AddCommand(newInstanceCheckCmd())
 	cmd.AddCommand(newInstanceDeployCmd())
 	cmd.AddCommand(newInstanceListCmd())
 	cmd.AddCommand(newInstanceDisplayCmd())
@@ -2322,6 +2325,117 @@ func getStatusIcon(status executor.CheckStatus) string {
 
 func printDiagnoseJSON(result *executor.DiagnoseResult) error {
 	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to format JSON: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+func newInstanceCheckCmd() *cobra.Command {
+	var (
+		kubeconfig   string
+		kubeContext  string
+		namespace    string
+		storageClass string
+		outputJSON   bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "check",
+		Short: "Check environment before deployment",
+		Long: `Perform pre-deployment environment checks for Kubernetes deployment.
+
+This command verifies:
+  - Kubernetes cluster connectivity
+  - Kubernetes version compatibility (requires 1.20+)
+  - Milvus Operator installation status
+  - Target namespace existence
+  - Storage class availability
+  - Resource quota capacity
+
+Run this check before deploying a Milvus instance to ensure the environment is ready.
+
+Examples:
+  miup instance check
+  miup instance check --kubeconfig ~/.kube/config
+  miup instance check --namespace milvus --storage-class standard
+  miup instance check --json`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			checker, err := check.NewChecker(check.Options{
+				Kubeconfig:   kubeconfig,
+				Context:      kubeContext,
+				Namespace:    namespace,
+				StorageClass: storageClass,
+			})
+			if err != nil {
+				return err
+			}
+
+			ctx := context.Background()
+			report, err := checker.Run(ctx)
+			if err != nil {
+				return err
+			}
+
+			if outputJSON {
+				return printCheckJSON(report)
+			}
+
+			return printCheckReport(report)
+		},
+	}
+
+	cmd.Flags().StringVar(&kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
+	cmd.Flags().StringVar(&kubeContext, "context", "", "Kubernetes context to use")
+	cmd.Flags().StringVarP(&namespace, "namespace", "n", "milvus", "Target namespace for deployment")
+	cmd.Flags().StringVar(&storageClass, "storage-class", "", "Storage class to verify")
+	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output in JSON format")
+
+	return cmd
+}
+
+func printCheckReport(report *check.Report) error {
+	// Header
+	fmt.Println(color.CyanString("Kubernetes Environment Check"))
+	fmt.Println(strings.Repeat("-", 50))
+
+	// Results
+	for _, r := range report.Results {
+		var statusIcon string
+		switch r.Status {
+		case check.StatusPass:
+			statusIcon = color.GreenString("[PASS]")
+		case check.StatusWarn:
+			statusIcon = color.YellowString("[WARN]")
+		case check.StatusFail:
+			statusIcon = color.RedString("[FAIL]")
+		}
+
+		fmt.Printf("  %s %s\n", statusIcon, r.Name)
+		fmt.Printf("       %s\n", r.Message)
+		if r.Suggest != "" {
+			fmt.Printf("       %s %s\n", color.CyanString("Suggestion:"), r.Suggest)
+		}
+	}
+
+	// Summary
+	fmt.Println(strings.Repeat("-", 50))
+	fmt.Printf("Summary: %d passed, %d warnings, %d failed\n",
+		report.Summary.Passed, report.Summary.Warned, report.Summary.Failed)
+
+	if report.CanDeploy {
+		fmt.Println(color.GreenString("Environment is ready for deployment!"))
+	} else {
+		fmt.Println(color.RedString("Environment is NOT ready. Please fix the failed checks."))
+		return fmt.Errorf("environment check failed")
+	}
+
+	return nil
+}
+
+func printCheckJSON(report *check.Report) error {
+	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to format JSON: %w", err)
 	}
