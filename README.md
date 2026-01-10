@@ -33,11 +33,17 @@ curl -sSL https://raw.githubusercontent.com/mmga-lab/miup/main/install.sh | sh
 # Start a standalone Milvus instance
 miup playground start
 
-# Start with monitoring enabled
+# Start with monitoring enabled (Prometheus + Grafana)
 miup playground start --with-monitor
 
-# Start in cluster mode
-miup playground start --mode cluster
+# View playground status
+miup playground status
+
+# View logs
+miup playground logs
+
+# Stop playground
+miup playground stop
 ```
 
 ### Install Components
@@ -78,19 +84,73 @@ miup instance scale my-instance --component querynode --replicas 3
 
 ## Commands
 
+### Component Management
+
 | Command | Description |
 |---------|-------------|
-| `miup install <component>` | Install a component |
+| `miup install <component>` | Install a component (e.g., birdwatcher, milvus-backup) |
 | `miup uninstall <component>` | Uninstall a component |
 | `miup list` | List installed components |
-| `miup playground start` | Start local Milvus playground (Docker) |
+| `miup list --available` | List available components |
+| `miup run <component>` | Run an installed component |
+
+### Playground (Local Docker)
+
+| Command | Description |
+|---------|-------------|
+| `miup playground start` | Start local Milvus instance |
 | `miup playground stop` | Stop playground |
-| `miup instance deploy` | Deploy a Milvus instance (Kubernetes) |
+| `miup playground status` | Show playground status |
+| `miup playground list` | List all playground instances |
+| `miup playground logs` | View playground logs |
+| `miup playground clean` | Remove playground data |
+
+### Instance Management (Kubernetes)
+
+| Command | Description |
+|---------|-------------|
+| `miup instance deploy` | Deploy a Milvus instance |
+| `miup instance list` | List all instances |
+| `miup instance display` | Show instance details |
 | `miup instance start` | Start an instance |
 | `miup instance stop` | Stop an instance |
+| `miup instance destroy` | Destroy an instance |
 | `miup instance scale` | Scale instance components |
-| `miup instance upgrade` | Upgrade an instance |
+| `miup instance replicas` | Show current replica counts |
+| `miup instance upgrade` | Upgrade instance version |
+| `miup instance logs` | View instance logs |
+| `miup instance diagnose` | Run health diagnostics |
+| `miup instance config show` | Show instance configuration |
+| `miup instance config set` | Set configuration value |
+| `miup instance config import` | Import configuration from file |
+| `miup instance config export` | Export configuration to stdout |
+| `miup instance template` | Print topology template |
+
+### Image Mirror (Offline Deployment)
+
+| Command | Description |
+|---------|-------------|
+| `miup mirror pull` | Pull images from registry |
+| `miup mirror save` | Save images to tar file |
+| `miup mirror load` | Load images from tar file |
+| `miup mirror push` | Push images to private registry |
+| `miup mirror list` | List required images |
+
+### Benchmark
+
+| Command | Description |
+|---------|-------------|
+| `miup bench milvus prepare` | Prepare benchmark data |
+| `miup bench milvus search` | Run search benchmark |
+| `miup bench milvus insert` | Run insert benchmark |
+| `miup bench milvus cleanup` | Clean up benchmark data |
+
+### Utility
+
+| Command | Description |
+|---------|-------------|
 | `miup version` | Show version info |
+| `miup completion` | Generate shell completion |
 
 ## Configuration
 
