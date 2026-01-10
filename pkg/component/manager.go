@@ -89,25 +89,33 @@ func (m *Manager) Install(ctx context.Context, name, version string) error {
 	}
 	if err := m.downloader.DownloadAsset(ctx, asset, downloadDir); err != nil {
 		if tempDir != "" {
-			os.RemoveAll(tempDir)
+			if rmErr := os.RemoveAll(tempDir); rmErr != nil {
+				logger.Warn("Failed to cleanup temp dir: %v", rmErr)
+			}
 		} else {
-			os.RemoveAll(versionDir)
+			if rmErr := os.RemoveAll(versionDir); rmErr != nil {
+				logger.Warn("Failed to cleanup version dir: %v", rmErr)
+			}
 		}
 		return fmt.Errorf("failed to download: %w", err)
 	}
 	if existing {
 		backupDir := versionDir + ".bak"
-		os.RemoveAll(backupDir)
+		_ = os.RemoveAll(backupDir) // Ignore old backup removal
 		if err := os.Rename(versionDir, backupDir); err != nil {
-			os.RemoveAll(tempDir)
+			if rmErr := os.RemoveAll(tempDir); rmErr != nil {
+				logger.Warn("Failed to cleanup temp dir: %v", rmErr)
+			}
 			return fmt.Errorf("failed to backup existing version: %w", err)
 		}
 		if err := os.Rename(tempDir, versionDir); err != nil {
-			_ = os.Rename(backupDir, versionDir)
-			os.RemoveAll(tempDir)
+			_ = os.Rename(backupDir, versionDir) // Best effort restore
+			if rmErr := os.RemoveAll(tempDir); rmErr != nil {
+				logger.Warn("Failed to cleanup temp dir: %v", rmErr)
+			}
 			return fmt.Errorf("failed to replace existing version: %w", err)
 		}
-		os.RemoveAll(backupDir)
+		_ = os.RemoveAll(backupDir) // Cleanup is best-effort
 	}
 
 	// Make binary executable
@@ -169,7 +177,9 @@ func (m *Manager) Uninstall(ctx context.Context, name, version string) error {
 				}
 			}
 			meta.UpdatedAt = time.Now()
-			SaveMeta(meta, metaPath)
+			if err := SaveMeta(meta, metaPath); err != nil {
+				logger.Warn("Failed to update metadata: %v", err)
+			}
 		}
 
 		logger.Success("Uninstalled %s %s", name, version)

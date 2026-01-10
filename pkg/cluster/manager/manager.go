@@ -117,7 +117,9 @@ func (m *Manager) Deploy(ctx context.Context, name string, topoPath string, opts
 	logger.Info("Deploying cluster '%s'...", name)
 	if err := exec.Deploy(ctx); err != nil {
 		meta.Status = spec.StatusUnknown
-		spec.SaveMeta(meta, m.MetaPath(name))
+		if saveErr := spec.SaveMeta(meta, m.MetaPath(name)); saveErr != nil {
+			logger.Warn("Failed to update metadata: %v", saveErr)
+		}
 		return fmt.Errorf("deployment failed: %w", err)
 	}
 
@@ -297,6 +299,7 @@ func (m *Manager) List(ctx context.Context) ([]*spec.ClusterMeta, error) {
 
 		meta, err := spec.LoadMeta(m.MetaPath(entry.Name()))
 		if err != nil {
+			logger.Warn("Failed to load metadata for cluster '%s': %v", entry.Name(), err)
 			continue
 		}
 
@@ -377,7 +380,9 @@ func (m *Manager) Scale(ctx context.Context, name string, component string, opts
 	if err := exec.Scale(ctx, component, opts); err != nil {
 		// Restore old status on failure
 		meta.Status = oldStatus
-		spec.SaveMeta(meta, m.MetaPath(name))
+		if saveErr := spec.SaveMeta(meta, m.MetaPath(name)); saveErr != nil {
+			logger.Warn("Failed to restore metadata status: %v", saveErr)
+		}
 		return fmt.Errorf("failed to scale: %w", err)
 	}
 
@@ -474,7 +479,9 @@ func (m *Manager) Upgrade(ctx context.Context, name string, version string) erro
 	if err := exec.Upgrade(ctx, version); err != nil {
 		// Restore old status on failure
 		meta.Status = oldStatus
-		spec.SaveMeta(meta, m.MetaPath(name))
+		if saveErr := spec.SaveMeta(meta, m.MetaPath(name)); saveErr != nil {
+			logger.Warn("Failed to restore metadata status: %v", saveErr)
+		}
 		return fmt.Errorf("failed to upgrade: %w", err)
 	}
 

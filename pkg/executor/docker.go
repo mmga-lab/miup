@@ -143,12 +143,6 @@ func (dc *DockerCompose) runOutput(ctx context.Context, args ...string) (string,
 	return string(output), err
 }
 
-// runSilent executes a docker compose command silently
-func (dc *DockerCompose) runSilent(ctx context.Context, args ...string) error {
-	cmd := dc.buildCommand(ctx, args...)
-	return cmd.Run()
-}
-
 // buildCommand builds the docker compose command
 func (dc *DockerCompose) buildCommand(ctx context.Context, args ...string) *exec.Cmd {
 	baseArgs := []string{"compose", "-f", dc.ComposeFilePath(), "-p", dc.projectName}

@@ -239,6 +239,7 @@ func (m *Manager) List(ctx context.Context) ([]*InstanceStatus, error) {
 
 		status, err := m.Status(ctx, entry.Name())
 		if err != nil {
+			logger.Warn("Failed to get status for playground '%s': %v", entry.Name(), err)
 			continue
 		}
 

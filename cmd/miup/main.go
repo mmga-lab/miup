@@ -946,7 +946,7 @@ Examples:
 	cmd.Flags().StringVar(&cpuLimit, "cpu-limit", "", "CPU limit (e.g., '4', '1000m')")
 	cmd.Flags().StringVar(&memoryRequest, "memory-request", "", "Memory request (e.g., '4Gi', '512Mi')")
 	cmd.Flags().StringVar(&memoryLimit, "memory-limit", "", "Memory limit (e.g., '8Gi', '1024Mi')")
-	cmd.MarkFlagRequired("component")
+	_ = cmd.MarkFlagRequired("component")
 
 	return cmd
 }
@@ -1447,7 +1447,7 @@ This is typically used in air-gapped environments after transferring the tar arc
 	}
 
 	cmd.Flags().StringVarP(&input, "input", "i", "", "Input tar file (required)")
-	cmd.MarkFlagRequired("input")
+	_ = cmd.MarkFlagRequired("input")
 
 	return cmd
 }
@@ -2040,10 +2040,9 @@ Examples:
 				key, value := parts[0], parts[1]
 
 				// Parse the value (try number, bool, then string)
-				var parsedValue interface{} = value
-				if v, err := fmt.Sscanf(value, "%d", new(int)); err == nil && v == 1 {
-					var intVal int
-					fmt.Sscanf(value, "%d", &intVal)
+				var parsedValue any = value
+				var intVal int
+				if _, err := fmt.Sscanf(value, "%d", &intVal); err == nil {
 					parsedValue = intVal
 				} else if value == "true" {
 					parsedValue = true
