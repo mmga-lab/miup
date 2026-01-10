@@ -50,10 +50,9 @@ func (m *Manager) TopologyPath(name string) string {
 // DeployOptions contains options for deployment
 type DeployOptions struct {
 	MilvusVersion string
-	Backend       spec.BackendType
 	SkipConfirm   bool
 
-	// Kubernetes specific options
+	// Kubernetes options
 	Kubeconfig  string
 	KubeContext string
 	Namespace   string
@@ -77,11 +76,6 @@ func (m *Manager) Deploy(ctx context.Context, name string, topoPath string, opts
 		return fmt.Errorf("invalid topology: %w", err)
 	}
 
-	// Set default backend
-	if opts.Backend == "" {
-		opts.Backend = spec.BackendLocal
-	}
-
 	// Set default Milvus version
 	if opts.MilvusVersion == "" {
 		opts.MilvusVersion = "v2.5.4"
@@ -99,16 +93,14 @@ func (m *Manager) Deploy(ctx context.Context, name string, topoPath string, opts
 	}
 
 	// Create and save metadata
-	meta := spec.NewClusterMeta(name, specification, opts.Backend, opts.MilvusVersion)
+	meta := spec.NewClusterMeta(name, specification, opts.MilvusVersion)
 
-	// Save Kubernetes specific options
-	if opts.Backend == spec.BackendKubernetes {
-		meta.Kubeconfig = opts.Kubeconfig
-		meta.KubeContext = opts.KubeContext
-		meta.Namespace = opts.Namespace
-		if meta.Namespace == "" {
-			meta.Namespace = specification.Global.Namespace
-		}
+	// Save Kubernetes options
+	meta.Kubeconfig = opts.Kubeconfig
+	meta.KubeContext = opts.KubeContext
+	meta.Namespace = opts.Namespace
+	if meta.Namespace == "" {
+		meta.Namespace = specification.Global.Namespace
 	}
 
 	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
@@ -614,33 +606,25 @@ func (m *Manager) Exists(name string) bool {
 func (m *Manager) buildDeployOptions(meta *spec.ClusterMeta) DeployOptions {
 	return DeployOptions{
 		MilvusVersion: meta.MilvusVersion,
-		Backend:       meta.Backend,
 		Kubeconfig:    meta.Kubeconfig,
 		KubeContext:   meta.KubeContext,
 		Namespace:     meta.Namespace,
 	}
 }
 
-// createExecutor creates the appropriate executor based on backend
+// createExecutor creates the Kubernetes executor
 func (m *Manager) createExecutor(name string, specification *spec.Specification, opts DeployOptions) (executor.Executor, error) {
-	switch opts.Backend {
-	case spec.BackendLocal:
-		return executor.NewLocalExecutor(m.ClusterDir(name), name, specification, opts.MilvusVersion)
-	case spec.BackendKubernetes:
-		namespace := opts.Namespace
-		if namespace == "" {
-			namespace = specification.Global.Namespace
-		}
-		return executor.NewKubernetesExecutor(executor.KubernetesOptions{
-			Kubeconfig:    opts.Kubeconfig,
-			Context:       opts.KubeContext,
-			Namespace:     namespace,
-			ClusterName:   name,
-			Spec:          specification,
-			MilvusVersion: opts.MilvusVersion,
-			WithMonitor:   opts.WithMonitor,
-		})
-	default:
-		return nil, fmt.Errorf("unknown backend: %s", opts.Backend)
+	namespace := opts.Namespace
+	if namespace == "" {
+		namespace = specification.Global.Namespace
 	}
+	return executor.NewKubernetesExecutor(executor.KubernetesOptions{
+		Kubeconfig:    opts.Kubeconfig,
+		Context:       opts.KubeContext,
+		Namespace:     namespace,
+		ClusterName:   name,
+		Spec:          specification,
+		MilvusVersion: opts.MilvusVersion,
+		WithMonitor:   opts.WithMonitor,
+	})
 }
