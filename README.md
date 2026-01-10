@@ -5,8 +5,8 @@ MiUp is a component manager for [Milvus](https://milvus.io) vector database, ins
 ## Features
 
 - **Component Management**: Install, update, and manage Milvus and its dependencies
-- **Playground**: Quick local development environment with a single command
-- **Cluster Management**: Deploy and manage production clusters (local or Kubernetes)
+- **Playground**: Quick local development environment with Docker (single command)
+- **Instance Management**: Deploy and manage Milvus instances on Kubernetes
 - **Monitoring Integration**: Built-in Prometheus and Grafana support
 
 ## Installation
@@ -53,27 +53,27 @@ miup install milvus
 miup install milvus:v2.6.0
 ```
 
-### Deploy a Cluster
+### Deploy an Instance (Kubernetes)
 
 ```bash
 # Generate topology template
-miup cluster template > topology.yaml
+miup instance template > topology.yaml
 
 # Edit the topology file as needed
 vim topology.yaml
 
-# Deploy the cluster
-miup cluster deploy my-cluster topology.yaml
+# Deploy to Kubernetes (requires Milvus Operator)
+miup instance deploy my-instance topology.yaml --kubeconfig ~/.kube/config
 
-# For Kubernetes deployment
-miup cluster deploy my-cluster topology.yaml --kubernetes
+# View instance status
+miup instance display my-instance
 
-# View cluster status
-miup cluster display my-cluster
+# Start/Stop instance
+miup instance start my-instance
+miup instance stop my-instance
 
-# Start/Stop cluster
-miup cluster start my-cluster
-miup cluster stop my-cluster
+# Scale components
+miup instance scale my-instance --component querynode --replicas 3
 ```
 
 ## Commands
@@ -83,13 +83,13 @@ miup cluster stop my-cluster
 | `miup install <component>` | Install a component |
 | `miup uninstall <component>` | Uninstall a component |
 | `miup list` | List installed components |
-| `miup playground start` | Start local Milvus playground |
+| `miup playground start` | Start local Milvus playground (Docker) |
 | `miup playground stop` | Stop playground |
-| `miup cluster deploy` | Deploy a Milvus cluster |
-| `miup cluster start` | Start a cluster |
-| `miup cluster stop` | Stop a cluster |
-| `miup cluster scale-out` | Scale out a cluster |
-| `miup cluster upgrade` | Upgrade a cluster |
+| `miup instance deploy` | Deploy a Milvus instance (Kubernetes) |
+| `miup instance start` | Start an instance |
+| `miup instance stop` | Stop an instance |
+| `miup instance scale` | Scale instance components |
+| `miup instance upgrade` | Upgrade an instance |
 | `miup version` | Show version info |
 
 ## Configuration
