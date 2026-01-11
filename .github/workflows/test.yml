@@ -68,7 +68,7 @@ jobs:
           args: --timeout=5m
 
   integration-test:
-    name: Integration Tests (Kind)
+    name: Integration Tests (k3d)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -80,14 +80,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Create kind cluster
-        uses: helm/kind-action@v1
-        with:
-          cluster_name: miup-test
-          wait: 120s
-
-      - name: Verify cluster
+      - name: Install k3d
         run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+          k3d version
+
+      - name: Create k3d cluster
+        run: |
+          k3d cluster create miup-test \
+            --agents 1 \
+            --wait \
+            --timeout 120s
           kubectl cluster-info
           kubectl get nodes
 
@@ -111,10 +114,8 @@ jobs:
       - name: Run integration tests
         run: |
           go test -v -tags=integration ./pkg/cluster/... ./pkg/k8s/...
-        env:
-          KUBECONFIG: ${{ env.KUBECONFIG }}
 
       - name: Cleanup
         if: always()
         run: |
-          kind delete cluster --name miup-test || true
+          k3d cluster delete miup-test || true
