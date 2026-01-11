@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -260,14 +261,9 @@ Examples:
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if available {
 				if jsonOutput {
-					type AvailableComponent struct {
-						Name        string `json:"name"`
-						Description string `json:"description"`
-						Repo        string `json:"repo"`
-					}
-					var comps []AvailableComponent
+					var comps []output.AvailableComponent
 					for name, def := range component.Registry {
-						comps = append(comps, AvailableComponent{
+						comps = append(comps, output.AvailableComponent{
 							Name:        name,
 							Description: def.Description,
 							Repo:        def.Repo,
@@ -2897,7 +2893,7 @@ enabling the AI assistant to help with Milvus management tasks.`,
 				return fmt.Errorf("failed to get home directory: %w", err)
 			}
 
-			skillDir := home + "/.claude/skills/miup"
+			skillDir := filepath.Join(home, ".claude", "skills", "miup")
 
 			// Check if already installed
 			if _, err := os.Stat(skillDir); err == nil && !force {
@@ -2907,7 +2903,7 @@ enabling the AI assistant to help with Milvus management tasks.`,
 			}
 
 			// Create directory
-			if err := os.MkdirAll(skillDir+"/references", 0755); err != nil {
+			if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0755); err != nil {
 				return fmt.Errorf("failed to create skill directory: %w", err)
 			}
 
@@ -2926,7 +2922,7 @@ enabling the AI assistant to help with Milvus management tasks.`,
 				}
 
 				// Remove "miup/" prefix for destination
-				destFile := skillDir + "/" + file[5:]
+				destFile := filepath.Join(skillDir, strings.TrimPrefix(file, "miup/"))
 				if err := os.WriteFile(destFile, content, 0644); err != nil {
 					return fmt.Errorf("failed to write %s: %w", destFile, err)
 				}
@@ -2952,8 +2948,8 @@ func newSkillShowCmd() *cobra.Command {
 				return fmt.Errorf("failed to get home directory: %w", err)
 			}
 
-			skillDir := home + "/.claude/skills/miup"
-			skillFile := skillDir + "/SKILL.md"
+			skillDir := filepath.Join(home, ".claude", "skills", "miup")
+			skillFile := filepath.Join(skillDir, "SKILL.md")
 
 			if _, err := os.Stat(skillFile); os.IsNotExist(err) {
 				fmt.Println("Skill not installed")
@@ -2984,7 +2980,7 @@ func newSkillUninstallCmd() *cobra.Command {
 				return fmt.Errorf("failed to get home directory: %w", err)
 			}
 
-			skillDir := home + "/.claude/skills/miup"
+			skillDir := filepath.Join(home, ".claude", "skills", "miup")
 
 			if _, err := os.Stat(skillDir); os.IsNotExist(err) {
 				fmt.Println("Skill not installed")

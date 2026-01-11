@@ -22,6 +22,13 @@ type ComponentInfo struct {
 	Path        string    `json:"path"`
 }
 
+// AvailableComponent represents an available (not installed) component.
+type AvailableComponent struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Repo        string `json:"repo"`
+}
+
 // ComponentList represents a list of components.
 type ComponentList struct {
 	Components []ComponentInfo `json:"components"`
