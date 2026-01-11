@@ -1,0 +1,68 @@
+# Milvus Distributed with GPU Acceleration
+# Requires GPU nodes with NVIDIA drivers
+# Deploy: miup instance deploy <name> distributed-gpu.yaml
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: my-milvus
+  namespace: milvus
+  labels:
+    app: milvus
+spec:
+  mode: cluster
+  components:
+    image: milvusdb/milvus:v2.5.4-gpu  # GPU image
+    proxy:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+    queryNode:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 1
+          memory: 4Gi
+          nvidia.com/gpu: 1
+        limits:
+          cpu: 4
+          memory: 16Gi
+          nvidia.com/gpu: 1
+    dataNode:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+    indexNode:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 1
+          memory: 4Gi
+          nvidia.com/gpu: 1
+        limits:
+          cpu: 4
+          memory: 16Gi
+          nvidia.com/gpu: 1
+  config:
+    gpu:
+      initMemSize: 0
+      maxMemSize: 0
+    common:
+      gpu:
+        enabled: true
+  dependencies:
+    etcd:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          replicaCount: 3
+    storage:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          mode: distributed

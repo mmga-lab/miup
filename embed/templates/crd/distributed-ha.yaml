@@ -1,0 +1,112 @@
+# Milvus Distributed Mode - High Availability
+# Production deployment with HA coordinators and anti-affinity
+# Deploy: miup instance deploy <name> distributed-ha.yaml
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: my-milvus
+  namespace: milvus
+  labels:
+    app: milvus
+spec:
+  mode: cluster
+  components:
+    image: milvusdb/milvus:v2.5.4
+    imageUpdateMode: rollingUpgrade
+    # Proxy - handles client requests (HA)
+    proxy:
+      replicas: 3
+      resources:
+        requests:
+          cpu: 1
+          memory: 2Gi
+        limits:
+          cpu: 4
+          memory: 8Gi
+    # Coordinators - all with HA (activeStandby mode is handled by Milvus internally)
+    rootCoord:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+    queryCoord:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+    dataCoord:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+    indexCoord:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+    # Worker nodes - scaled for production
+    queryNode:
+      replicas: 3
+      resources:
+        requests:
+          cpu: 2
+          memory: 4Gi
+        limits:
+          cpu: 8
+          memory: 16Gi
+    dataNode:
+      replicas: 3
+      resources:
+        requests:
+          cpu: 1
+          memory: 2Gi
+        limits:
+          cpu: 4
+          memory: 8Gi
+    indexNode:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 2
+          memory: 4Gi
+        limits:
+          cpu: 8
+          memory: 16Gi
+  config:
+    rootCoord:
+      activeStandby:
+        enabled: true
+    queryCoord:
+      activeStandby:
+        enabled: true
+    dataCoord:
+      activeStandby:
+        enabled: true
+    indexCoord:
+      activeStandby:
+        enabled: true
+  dependencies:
+    etcd:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          replicaCount: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+    storage:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          mode: distributed
+          replicas: 4
+          resources:
+            requests:
+              memory: 1Gi

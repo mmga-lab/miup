@@ -1,0 +1,97 @@
+# Milvus Distributed Mode
+# Production-ready distributed deployment
+# Deploy: miup instance deploy <name> distributed.yaml
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: my-milvus
+  namespace: milvus
+  labels:
+    app: milvus
+spec:
+  mode: cluster
+  components:
+    image: milvusdb/milvus:v2.5.4
+    # Proxy - handles client requests
+    proxy:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: 2
+          memory: 4Gi
+    # Coordinators
+    rootCoord:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+    queryCoord:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+    dataCoord:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+    indexCoord:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 200m
+          memory: 256Mi
+    # Worker nodes
+    queryNode:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 1
+          memory: 2Gi
+        limits:
+          cpu: 4
+          memory: 8Gi
+    dataNode:
+      replicas: 2
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: 2
+          memory: 4Gi
+    indexNode:
+      replicas: 1
+      resources:
+        requests:
+          cpu: 1
+          memory: 2Gi
+        limits:
+          cpu: 4
+          memory: 8Gi
+  dependencies:
+    etcd:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          replicaCount: 3
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+    storage:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          mode: distributed
+          resources:
+            requests:
+              memory: 512Mi

@@ -15,6 +15,7 @@ import (
 
 	"github.com/fatih/color"
 	"golang.org/x/term"
+	embedPkg "github.com/mmga-lab/miup/embed"
 	"github.com/mmga-lab/miup/pkg/audit"
 	"github.com/mmga-lab/miup/pkg/check"
 	"github.com/mmga-lab/miup/pkg/cluster/executor"
@@ -1299,33 +1300,62 @@ func newInstanceLogsCmd() *cobra.Command {
 
 func newInstanceTemplateCmd() *cobra.Command {
 	var (
-		mode    string
-		withTLS bool
+		scenario string
+		listAll  bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "template",
-		Short: "Print instance topology template",
-		Long: `Print a topology template for deploying Milvus instances on Kubernetes.
+		Use:   "template [scenario]",
+		Short: "Print Milvus CRD template for Kubernetes deployment",
+		Long: `Print a Milvus CRD template for deploying Milvus instances on Kubernetes.
+
+Available scenarios:
+  standalone            Minimal standalone mode for development (default)
+  standalone-tls        Standalone with TLS encryption
+  standalone-external-s3 Standalone with external S3/MinIO storage
+  distributed           Production-ready distributed deployment
+  distributed-ha        High availability with coordinator failover
+  distributed-pulsar    Distributed with Pulsar message queue
+  distributed-gpu       Distributed with GPU acceleration
 
 Examples:
-  miup instance template                    Standalone template
-  miup instance template --tls              Standalone with TLS
-  miup instance template --mode distributed Distributed template`,
+  miup instance template                      Show standalone template
+  miup instance template distributed          Show distributed template
+  miup instance template distributed-ha       Show HA distributed template
+  miup instance template --list               List all available templates`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if withTLS {
-				fmt.Print(kubernetesTLSTemplate)
-			} else if mode == "distributed" {
-				fmt.Print(kubernetesDistributedTemplate)
-			} else {
-				fmt.Print(kubernetesStandaloneTemplate)
+			if listAll {
+				fmt.Println("Available templates:")
+				fmt.Println()
+				for _, name := range embedPkg.ListCRDTemplates() {
+					desc := embedPkg.CRDTemplateDescriptions[name]
+					fmt.Printf("  %-25s %s\n", name, desc)
+				}
+				fmt.Println()
+				fmt.Println("Usage: miup instance template <scenario>")
+				return nil
 			}
+
+			// Get scenario from args or flag
+			if len(args) > 0 {
+				scenario = args[0]
+			}
+			if scenario == "" {
+				scenario = "standalone"
+			}
+
+			content, err := embedPkg.GetCRDTemplate(scenario)
+			if err != nil {
+				return fmt.Errorf("template '%s' not found. Use --list to see available templates", scenario)
+			}
+			fmt.Print(string(content))
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&mode, "mode", "standalone", "Deployment mode: standalone or distributed")
-	cmd.Flags().BoolVar(&withTLS, "tls", false, "Include TLS configuration in template")
+	cmd.Flags().StringVar(&scenario, "scenario", "", "Template scenario (deprecated, use positional argument)")
+	cmd.Flags().BoolVar(&listAll, "list", false, "List all available templates")
+	_ = cmd.Flags().MarkHidden("scenario")
 
 	return cmd
 }
@@ -1344,99 +1374,6 @@ func formatClusterStatus(status spec.ClusterStatus) string {
 		return color.RedString("unknown")
 	}
 }
-
-const kubernetesStandaloneTemplate = `# MiUp Kubernetes Topology - Standalone Mode
-# Deploy with: miup instance deploy <instance-name> <this-file>
-# Requires: Milvus Operator installed in your Kubernetes cluster
-
-global:
-  namespace: "milvus"
-  storage_class: "standard"
-
-milvus_servers:
-  - host: 127.0.0.1
-    port: 19530
-    mode: standalone
-
-# In-cluster etcd (managed by Milvus Operator)
-etcd_servers:
-  - host: 127.0.0.1
-    client_port: 2379
-
-# In-cluster MinIO (managed by Milvus Operator)
-minio_servers:
-  - host: 127.0.0.1
-    port: 9000
-    access_key: "minioadmin"
-    secret_key: "minioadmin"
-`
-
-const kubernetesDistributedTemplate = `# MiUp Kubernetes Topology - Distributed Mode
-# Deploy with: miup instance deploy <instance-name> <this-file>
-# Requires: Milvus Operator installed in your Kubernetes cluster
-
-global:
-  namespace: "milvus"
-  storage_class: "standard"
-
-milvus_servers:
-  - host: 127.0.0.1
-    port: 19530
-    mode: distributed
-    components:
-      proxy:
-        replicas: 2
-        resources:
-          cpu: "1"
-          memory: "2Gi"
-      rootCoord:
-        replicas: 1
-      queryCoord:
-        replicas: 1
-      dataCoord:
-        replicas: 1
-      indexCoord:
-        replicas: 1
-      queryNode:
-        replicas: 2
-        resources:
-          cpu: "2"
-          memory: "4Gi"
-      dataNode:
-        replicas: 2
-        resources:
-          cpu: "1"
-          memory: "2Gi"
-      indexNode:
-        replicas: 1
-        resources:
-          cpu: "2"
-          memory: "4Gi"
-
-# In-cluster etcd (managed by Milvus Operator)
-etcd_servers:
-  - host: 127.0.0.1
-    client_port: 2379
-
-# In-cluster MinIO (managed by Milvus Operator)
-minio_servers:
-  - host: 127.0.0.1
-    port: 9000
-    access_key: "minioadmin"
-    secret_key: "minioadmin"
-
-# External etcd example (uncomment to use):
-# etcd_servers:
-#   - host: etcd-cluster.etcd-system.svc.cluster.local
-#     client_port: 2379
-
-# External S3/MinIO example (uncomment to use):
-# minio_servers:
-#   - host: minio.minio-system.svc.cluster.local
-#     port: 9000
-#     access_key: "your-access-key"
-#     secret_key: "your-secret-key"
-`
 
 func newCompletionCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -1810,42 +1747,6 @@ func tagAndPushImage(source, target string) error {
 	pushCmd.Stderr = os.Stderr
 	return pushCmd.Run()
 }
-
-const kubernetesTLSTemplate = `# MiUp Kubernetes Topology - Standalone Mode with TLS
-# Deploy with: miup instance deploy <instance-name> <this-file>
-# Requires: Milvus Operator installed in your Kubernetes cluster
-#
-# Before deploying, create TLS secret:
-#   kubectl create secret generic milvus-tls \
-#     --from-file=server.pem --from-file=server.key --from-file=ca.pem \
-#     -n milvus
-
-global:
-  namespace: "milvus"
-  storage_class: "standard"
-  tls:
-    enabled: true
-    mode: 1  # 1 = one-way TLS, 2 = two-way TLS (mutual TLS)
-    secret_name: "milvus-tls"  # K8s secret containing TLS certificates
-    # internal_enabled: false  # Enable TLS for internal component communication
-
-milvus_servers:
-  - host: 127.0.0.1
-    port: 19530
-    mode: standalone
-
-# In-cluster etcd (managed by Milvus Operator)
-etcd_servers:
-  - host: 127.0.0.1
-    client_port: 2379
-
-# In-cluster MinIO (managed by Milvus Operator)
-minio_servers:
-  - host: 127.0.0.1
-    port: 9000
-    access_key: "minioadmin"
-    secret_key: "minioadmin"
-`
 
 // ==================== Bench Commands ====================
 // Bench commands wrap go-vdbbench for Milvus benchmarking
