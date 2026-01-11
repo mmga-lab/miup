@@ -1,0 +1,39 @@
+# Milvus Standalone with External S3 Storage
+# Use existing S3/MinIO for object storage
+# Deploy: miup instance deploy <name> standalone-external-s3.yaml
+#
+# Prerequisites:
+#   1. Create a secret with S3 credentials:
+#      kubectl create secret generic milvus-s3-secret \
+#        --from-literal=accesskey=<ACCESS_KEY> \
+#        --from-literal=secretkey=<SECRET_KEY> \
+#        -n milvus
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: my-milvus
+  namespace: milvus
+  labels:
+    app: milvus
+spec:
+  mode: standalone
+  components:
+    image: milvusdb/milvus:v2.5.4
+  config:
+    minio:
+      bucketName: milvus-bucket    # Change to your bucket name
+      rootPath: milvus             # Root path in bucket
+      useSSL: false                # Set to true for HTTPS
+      useIAM: false                # Set to true for IAM auth (AWS)
+  dependencies:
+    etcd:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          replicaCount: 1
+    storage:
+      external: true
+      type: S3
+      endpoint: minio.minio.svc:9000  # Change to your S3/MinIO endpoint
+      secretRef: milvus-s3-secret     # Secret containing accesskey/secretkey

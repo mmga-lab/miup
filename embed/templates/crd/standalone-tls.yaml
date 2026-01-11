@@ -1,0 +1,51 @@
+# Milvus Standalone with TLS Encryption
+# Secure communication between client and server
+# Deploy: miup instance deploy <name> standalone-tls.yaml
+#
+# Prerequisites:
+#   1. Create TLS secret:
+#      kubectl create secret generic milvus-tls \
+#        --from-file=tls.crt=server.crt \
+#        --from-file=tls.key=server.key \
+#        --from-file=ca.crt=ca.crt \
+#        -n milvus
+apiVersion: milvus.io/v1beta1
+kind: Milvus
+metadata:
+  name: my-milvus
+  namespace: milvus
+  labels:
+    app: milvus
+spec:
+  mode: standalone
+  components:
+    image: milvusdb/milvus:v2.5.4
+    volumes:
+      - name: tls-certs
+        secret:
+          secretName: milvus-tls
+    volumeMounts:
+      - name: tls-certs
+        mountPath: /certs
+        readOnly: true
+  config:
+    common:
+      security:
+        tlsMode: 1  # 1=one-way TLS, 2=two-way TLS (mTLS)
+    tls:
+      serverPemPath: /certs/tls.crt
+      serverKeyPath: /certs/tls.key
+      caPemPath: /certs/ca.crt
+  dependencies:
+    etcd:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          replicaCount: 1
+    storage:
+      inCluster:
+        deletionPolicy: Delete
+        pvcDeletion: true
+        values:
+          mode: standalone
