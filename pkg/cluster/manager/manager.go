@@ -67,7 +67,18 @@ func (m *Manager) Deploy(ctx context.Context, name string, topoPath string, opts
 		return fmt.Errorf("cluster '%s' already exists", name)
 	}
 
-	// Load and validate specification
+	// Read file content to detect format
+	content, err := os.ReadFile(topoPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Check if it's a native Milvus CRD format
+	if isMilvusCRD(content) {
+		return m.deployFromCRD(ctx, name, topoPath, content, opts)
+	}
+
+	// Legacy topology.yaml format
 	specification, err := spec.LoadSpecification(topoPath)
 	if err != nil {
 		return err
@@ -702,4 +713,90 @@ func (m *Manager) createExecutor(name string, specification *spec.Specification,
 		MilvusVersion: opts.MilvusVersion,
 		WithMonitor:   opts.WithMonitor,
 	})
+}
+
+// isMilvusCRD checks if the content is a native Milvus CRD format
+func isMilvusCRD(content []byte) bool {
+	contentStr := string(content)
+	return strings.Contains(contentStr, "apiVersion: milvus.io/") ||
+		strings.Contains(contentStr, "kind: Milvus")
+}
+
+// deployFromCRD deploys directly from a Milvus CRD YAML file
+func (m *Manager) deployFromCRD(ctx context.Context, name string, topoPath string, content []byte, opts DeployOptions) error {
+	// Set default Milvus version if not specified
+	if opts.MilvusVersion == "" {
+		opts.MilvusVersion = "v2.5.4"
+	}
+
+	// Create cluster directory
+	clusterDir := m.ClusterDir(name)
+	if err := os.MkdirAll(clusterDir, 0755); err != nil {
+		return fmt.Errorf("failed to create cluster directory: %w", err)
+	}
+
+	// Save the CRD file as topology (for reference)
+	if err := os.WriteFile(m.TopologyPath(name), content, 0644); err != nil {
+		return fmt.Errorf("failed to save CRD file: %w", err)
+	}
+
+	// Determine mode from CRD content
+	mode := spec.ModeStandalone
+	if strings.Contains(string(content), "mode: cluster") {
+		mode = spec.ModeDistributed
+	}
+
+	// Create and save metadata
+	meta := &spec.ClusterMeta{
+		Name:          name,
+		Version:       "1.0",
+		Mode:          mode,
+		Backend:       spec.BackendKubernetes,
+		Status:        spec.StatusDeploying,
+		MilvusVersion: opts.MilvusVersion,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+		MilvusPort:    19530,
+		Kubeconfig:    opts.Kubeconfig,
+		KubeContext:   opts.KubeContext,
+		Namespace:     opts.Namespace,
+	}
+
+	if meta.Namespace == "" {
+		meta.Namespace = "milvus"
+	}
+
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to save metadata: %w", err)
+	}
+
+	// Create CRD executor and deploy
+	exec, err := executor.NewKubernetesCRDExecutor(executor.KubernetesCRDOptions{
+		Kubeconfig:  opts.Kubeconfig,
+		Context:     opts.KubeContext,
+		Namespace:   meta.Namespace,
+		ClusterName: name,
+		CRDContent:  content,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create executor: %w", err)
+	}
+
+	logger.Info("Deploying cluster '%s' from Milvus CRD...", name)
+	if err := exec.Deploy(ctx); err != nil {
+		meta.Status = spec.StatusUnknown
+		if saveErr := spec.SaveMeta(meta, m.MetaPath(name)); saveErr != nil {
+			logger.Warn("Failed to update metadata: %v", saveErr)
+		}
+		return fmt.Errorf("deployment failed: %w", err)
+	}
+
+	// Update status
+	meta.Status = spec.StatusRunning
+	if err := spec.SaveMeta(meta, m.MetaPath(name)); err != nil {
+		return fmt.Errorf("failed to update metadata: %w", err)
+	}
+
+	logger.Success("Cluster '%s' deployed successfully!", name)
+	return nil
 }
