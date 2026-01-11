@@ -65,18 +65,23 @@ func NewClient(opts ClientOptions) (*Client, error) {
 // buildConfig builds a Kubernetes config from kubeconfig file
 func buildConfig(kubeconfig, kubecontext string) (*rest.Config, error) {
 	if kubeconfig == "" {
-		// Try in-cluster config first
-		config, err := rest.InClusterConfig()
-		if err == nil {
-			return config, nil
-		}
+		// Check KUBECONFIG environment variable first
+		if envKubeconfig := os.Getenv("KUBECONFIG"); envKubeconfig != "" {
+			kubeconfig = envKubeconfig
+		} else {
+			// Try in-cluster config
+			config, err := rest.InClusterConfig()
+			if err == nil {
+				return config, nil
+			}
 
-		// Fall back to default kubeconfig
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
+			// Fall back to default kubeconfig
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, err
+			}
+			kubeconfig = filepath.Join(home, ".kube", "config")
 		}
-		kubeconfig = filepath.Join(home, ".kube", "config")
 	}
 
 	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}

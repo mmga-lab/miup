@@ -3,6 +3,7 @@ package check
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	storagev1 "k8s.io/api/storage/v1"
@@ -387,14 +388,19 @@ func (c *Checker) checkResourceQuota(ctx context.Context) Result {
 
 func buildConfig(kubeconfig, kubecontext string) (*rest.Config, error) {
 	if kubeconfig == "" {
-		// Try in-cluster config first
-		config, err := rest.InClusterConfig()
-		if err == nil {
-			return config, nil
-		}
+		// Check KUBECONFIG environment variable first
+		if envKubeconfig := os.Getenv("KUBECONFIG"); envKubeconfig != "" {
+			kubeconfig = envKubeconfig
+		} else {
+			// Try in-cluster config
+			config, err := rest.InClusterConfig()
+			if err == nil {
+				return config, nil
+			}
 
-		// Fall back to default kubeconfig
-		kubeconfig = clientcmd.RecommendedHomeFile
+			// Fall back to default kubeconfig
+			kubeconfig = clientcmd.RecommendedHomeFile
+		}
 	}
 
 	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
