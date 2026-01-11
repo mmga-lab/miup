@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"golang.org/x/term"
 	"github.com/mmga-lab/miup/pkg/audit"
 	"github.com/mmga-lab/miup/pkg/check"
 	"github.com/mmga-lab/miup/pkg/cluster/executor"
@@ -21,8 +22,10 @@ import (
 	"github.com/mmga-lab/miup/pkg/component"
 	"github.com/mmga-lab/miup/pkg/localdata"
 	"github.com/mmga-lab/miup/pkg/logger"
+	"github.com/mmga-lab/miup/pkg/output"
 	"github.com/mmga-lab/miup/pkg/playground"
 	"github.com/mmga-lab/miup/pkg/version"
+	"github.com/mmga-lab/miup/skills"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -57,6 +60,7 @@ func auditLog(instance, command string, args []string, err error, duration time.
 
 var (
 	verbose bool
+	noColor bool
 	rootCmd = &cobra.Command{
 		Use:   "miup",
 		Short: "MiUp is a component manager for Milvus",
@@ -78,6 +82,10 @@ For more information, visit: https://github.com/mmga-lab/miup`,
 			if verbose {
 				logger.EnableDebug()
 			}
+			// Disable color output if --no-color is set or not a TTY
+			if noColor || !term.IsTerminal(int(os.Stdout.Fd())) {
+				color.NoColor = true
+			}
 		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -86,6 +94,7 @@ For more information, visit: https://github.com/mmga-lab/miup`,
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
+	rootCmd.PersistentFlags().BoolVar(&noColor, "no-color", false, "Disable color output")
 
 	// Add subcommands
 	rootCmd.AddCommand(newVersionCmd())
@@ -98,15 +107,34 @@ func init() {
 	rootCmd.AddCommand(newCompletionCmd())
 	rootCmd.AddCommand(newMirrorCmd())
 	rootCmd.AddCommand(newBenchCmd())
+	rootCmd.AddCommand(newSkillCmd())
 }
 
 func newVersionCmd() *cobra.Command {
-	var short bool
+	var (
+		short      bool
+		jsonOutput bool
+	)
 	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Show miup version",
 		Run: func(cmd *cobra.Command, args []string) {
 			info := version.GetVersionInfo()
+
+			if jsonOutput {
+				versionInfo := output.VersionInfo{
+					Version:   info.Version,
+					GitHash:   info.GitHash,
+					GitBranch: info.GitBranch,
+					BuildTime: info.BuildTime,
+					GoVersion: info.GoVersion,
+					OS:        info.OS,
+					Arch:      info.Arch,
+				}
+				output.MustPrintJSON(output.NewSuccessResult(versionInfo))
+				return
+			}
+
 			if short {
 				fmt.Println(info.ShortString())
 			} else {
@@ -115,6 +143,7 @@ func newVersionCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&short, "short", "s", false, "Print short version")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	return cmd
 }
 
@@ -215,7 +244,10 @@ Examples:
 }
 
 func newListCmd() *cobra.Command {
-	var available bool
+	var (
+		available  bool
+		jsonOutput bool
+	)
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List installed or available components",
@@ -223,9 +255,26 @@ func newListCmd() *cobra.Command {
 
 Examples:
   miup list              List all installed components
-  miup list --available  List all available components`,
+  miup list --available  List all available components
+  miup list --json       List in JSON format`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if available {
+				if jsonOutput {
+					type AvailableComponent struct {
+						Name        string `json:"name"`
+						Description string `json:"description"`
+						Repo        string `json:"repo"`
+					}
+					var comps []AvailableComponent
+					for name, def := range component.Registry {
+						comps = append(comps, AvailableComponent{
+							Name:        name,
+							Description: def.Description,
+							Repo:        def.Repo,
+						})
+					}
+					return output.PrintJSON(os.Stdout, output.NewSuccessResult(comps))
+				}
 				fmt.Println("Available components:")
 				for name, def := range component.Registry {
 					fmt.Printf("  %-15s %s (%s)\n", name, def.Description, def.Repo)
@@ -245,6 +294,22 @@ Examples:
 			components, err := mgr.List(ctx)
 			if err != nil {
 				return err
+			}
+
+			if jsonOutput {
+				var compList []output.ComponentInfo
+				for _, meta := range components {
+					for ver, info := range meta.Versions {
+						compList = append(compList, output.ComponentInfo{
+							Name:        meta.Name,
+							Version:     ver,
+							Active:      ver == meta.Active,
+							InstalledAt: info.InstalledAt,
+							Path:        info.BinaryPath,
+						})
+					}
+				}
+				return output.PrintJSON(os.Stdout, output.NewSuccessResult(output.ComponentList{Components: compList}))
 			}
 
 			if len(components) == 0 {
@@ -278,6 +343,7 @@ Examples:
 		},
 	}
 	cmd.Flags().BoolVar(&available, "available", false, "List available components")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	return cmd
 }
 
@@ -466,7 +532,10 @@ func newPlaygroundStopCmd() *cobra.Command {
 }
 
 func newPlaygroundStatusCmd() *cobra.Command {
-	var tag string
+	var (
+		tag        string
+		jsonOutput bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "status",
@@ -489,6 +558,18 @@ func newPlaygroundStatusCmd() *cobra.Command {
 				return err
 			}
 
+			if jsonOutput {
+				pgStatus := output.PlaygroundStatus{
+					Tag:       tag,
+					Status:    string(status.Status),
+					Mode:      string(status.Meta.Mode),
+					Version:   status.Meta.MilvusVersion,
+					Port:      status.Meta.MilvusPort,
+					CreatedAt: status.Meta.CreatedAt,
+				}
+				return output.PrintJSON(os.Stdout, output.NewSuccessResult(pgStatus))
+			}
+
 			fmt.Printf("Playground: %s\n", color.CyanString(tag))
 			fmt.Printf("Status:     %s\n", formatStatus(status.Status))
 			fmt.Printf("Mode:       %s\n", status.Meta.Mode)
@@ -507,11 +588,14 @@ func newPlaygroundStatusCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&tag, "tag", "default", "Tag name of the playground instance")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 
 	return cmd
 }
 
 func newPlaygroundListCmd() *cobra.Command {
+	var jsonOutput bool
+
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all playground instances",
@@ -527,6 +611,21 @@ func newPlaygroundListCmd() *cobra.Command {
 			instances, err := manager.List(ctx)
 			if err != nil {
 				return err
+			}
+
+			if jsonOutput {
+				var pgList []output.PlaygroundSummary
+				for _, inst := range instances {
+					pgList = append(pgList, output.PlaygroundSummary{
+						Tag:       inst.Meta.Tag,
+						Status:    string(inst.Status),
+						Mode:      string(inst.Meta.Mode),
+						Version:   inst.Meta.MilvusVersion,
+						Port:      inst.Meta.MilvusPort,
+						CreatedAt: inst.Meta.CreatedAt,
+					})
+				}
+				return output.PrintJSON(os.Stdout, output.NewSuccessResult(output.PlaygroundList{Playgrounds: pgList}))
 			}
 
 			if len(instances) == 0 {
@@ -552,6 +651,7 @@ func newPlaygroundListCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	return cmd
 }
 
@@ -761,6 +861,8 @@ func newInstanceDeployCmd() *cobra.Command {
 }
 
 func newInstanceListCmd() *cobra.Command {
+	var jsonOutput bool
+
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all instances",
@@ -776,6 +878,23 @@ func newInstanceListCmd() *cobra.Command {
 			instances, err := mgr.List(ctx)
 			if err != nil {
 				return err
+			}
+
+			if jsonOutput {
+				var instList []output.InstanceSummary
+				for _, c := range instances {
+					instList = append(instList, output.InstanceSummary{
+						Name:      c.Name,
+						Status:    string(c.Status),
+						Mode:      string(c.Mode),
+						Backend:   string(c.Backend),
+						Version:   c.MilvusVersion,
+						Port:      c.MilvusPort,
+						Namespace: c.Namespace,
+						CreatedAt: c.CreatedAt,
+					})
+				}
+				return output.PrintJSON(os.Stdout, output.NewSuccessResult(output.InstanceList{Instances: instList}))
 			}
 
 			if len(instances) == 0 {
@@ -802,10 +921,13 @@ func newInstanceListCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	return cmd
 }
 
 func newInstanceDisplayCmd() *cobra.Command {
+	var jsonOutput bool
+
 	cmd := &cobra.Command{
 		Use:   "display <instance-name>",
 		Short: "Display instance details",
@@ -827,6 +949,21 @@ func newInstanceDisplayCmd() *cobra.Command {
 			}
 
 			meta := info.Meta
+
+			if jsonOutput {
+				instInfo := output.InstanceInfo{
+					Name:      meta.Name,
+					Status:    string(meta.Status),
+					Mode:      string(meta.Mode),
+					Backend:   string(meta.Backend),
+					Version:   meta.MilvusVersion,
+					Port:      meta.MilvusPort,
+					Namespace: meta.Namespace,
+					CreatedAt: meta.CreatedAt,
+				}
+				return output.PrintJSON(os.Stdout, output.NewSuccessResult(instInfo))
+			}
+
 			fmt.Printf("Cluster:  %s\n", color.CyanString(meta.Name))
 			fmt.Printf("Status:   %s\n", formatClusterStatus(meta.Status))
 			fmt.Printf("Mode:     %s\n", meta.Mode)
@@ -844,6 +981,7 @@ func newInstanceDisplayCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
 	return cmd
 }
 
@@ -2720,6 +2858,148 @@ func printAuditJSON(entries []audit.Entry) error {
 	}
 	fmt.Println(string(data))
 	return nil
+}
+
+// Skill commands for Claude Code integration
+
+func newSkillCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "skill",
+		Short: "Manage Claude Code skill for miup",
+		Long: `Manage the miup skill for Claude Code.
+
+The skill provides Claude with knowledge about miup commands and
+enables agent-friendly JSON output for automation.
+
+Install location: ~/.claude/skills/miup/`,
+	}
+
+	cmd.AddCommand(newSkillInstallCmd())
+	cmd.AddCommand(newSkillShowCmd())
+	cmd.AddCommand(newSkillUninstallCmd())
+
+	return cmd
+}
+
+func newSkillInstallCmd() *cobra.Command {
+	var force bool
+
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install miup skill for Claude Code",
+		Long: `Install the miup skill to ~/.claude/skills/miup/.
+
+This makes miup commands available as a skill in Claude Code,
+enabling the AI assistant to help with Milvus management tasks.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
+
+			skillDir := home + "/.claude/skills/miup"
+
+			// Check if already installed
+			if _, err := os.Stat(skillDir); err == nil && !force {
+				fmt.Printf("Skill already installed at %s\n", skillDir)
+				fmt.Println("Use --force to overwrite")
+				return nil
+			}
+
+			// Create directory
+			if err := os.MkdirAll(skillDir+"/references", 0755); err != nil {
+				return fmt.Errorf("failed to create skill directory: %w", err)
+			}
+
+			// Copy embedded files
+			files := []string{
+				"miup/SKILL.md",
+				"miup/references/instance.md",
+				"miup/references/playground.md",
+				"miup/references/component.md",
+			}
+
+			for _, file := range files {
+				content, err := skills.MiupSkill.ReadFile(file)
+				if err != nil {
+					return fmt.Errorf("failed to read embedded file %s: %w", file, err)
+				}
+
+				// Remove "miup/" prefix for destination
+				destFile := skillDir + "/" + file[5:]
+				if err := os.WriteFile(destFile, content, 0644); err != nil {
+					return fmt.Errorf("failed to write %s: %w", destFile, err)
+				}
+			}
+
+			fmt.Printf("Skill installed to %s\n", color.CyanString(skillDir))
+			fmt.Println("\nThe skill will be available in Claude Code for miup-related tasks.")
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Overwrite existing skill")
+	return cmd
+}
+
+func newSkillShowCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "show",
+		Short: "Show skill information",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
+
+			skillDir := home + "/.claude/skills/miup"
+			skillFile := skillDir + "/SKILL.md"
+
+			if _, err := os.Stat(skillFile); os.IsNotExist(err) {
+				fmt.Println("Skill not installed")
+				fmt.Println("\nRun 'miup skill install' to install the skill")
+				return nil
+			}
+
+			content, err := os.ReadFile(skillFile)
+			if err != nil {
+				return fmt.Errorf("failed to read skill file: %w", err)
+			}
+
+			fmt.Printf("Skill location: %s\n\n", color.CyanString(skillDir))
+			fmt.Println(string(content))
+			return nil
+		},
+	}
+	return cmd
+}
+
+func newSkillUninstallCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Uninstall miup skill from Claude Code",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("failed to get home directory: %w", err)
+			}
+
+			skillDir := home + "/.claude/skills/miup"
+
+			if _, err := os.Stat(skillDir); os.IsNotExist(err) {
+				fmt.Println("Skill not installed")
+				return nil
+			}
+
+			if err := os.RemoveAll(skillDir); err != nil {
+				return fmt.Errorf("failed to remove skill directory: %w", err)
+			}
+
+			fmt.Printf("Skill uninstalled from %s\n", skillDir)
+			return nil
+		},
+	}
+	return cmd
 }
 
 func main() {
