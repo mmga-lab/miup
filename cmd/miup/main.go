@@ -15,6 +15,7 @@ import (
 
 	"github.com/fatih/color"
 	"golang.org/x/term"
+	embedPkg "github.com/mmga-lab/miup/embed"
 	"github.com/mmga-lab/miup/pkg/audit"
 	"github.com/mmga-lab/miup/pkg/check"
 	"github.com/mmga-lab/miup/pkg/cluster/executor"
@@ -1299,33 +1300,62 @@ func newInstanceLogsCmd() *cobra.Command {
 
 func newInstanceTemplateCmd() *cobra.Command {
 	var (
-		mode    string
-		withTLS bool
+		scenario string
+		listAll  bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "template",
-		Short: "Print instance topology template",
-		Long: `Print a topology template for deploying Milvus instances on Kubernetes.
+		Use:   "template [scenario]",
+		Short: "Print Milvus CRD template for Kubernetes deployment",
+		Long: `Print a Milvus CRD template for deploying Milvus instances on Kubernetes.
+
+Available scenarios:
+  standalone            Minimal standalone mode for development (default)
+  standalone-tls        Standalone with TLS encryption
+  standalone-external-s3 Standalone with external S3/MinIO storage
+  distributed           Production-ready distributed deployment
+  distributed-ha        High availability with coordinator failover
+  distributed-pulsar    Distributed with Pulsar message queue
+  distributed-gpu       Distributed with GPU acceleration
 
 Examples:
-  miup instance template                    Standalone template
-  miup instance template --tls              Standalone with TLS
-  miup instance template --mode distributed Distributed template`,
+  miup instance template                      Show standalone template
+  miup instance template distributed          Show distributed template
+  miup instance template distributed-ha       Show HA distributed template
+  miup instance template --list               List all available templates`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if withTLS {
-				fmt.Print(kubernetesTLSTemplate)
-			} else if mode == "distributed" {
-				fmt.Print(kubernetesDistributedTemplate)
-			} else {
-				fmt.Print(kubernetesStandaloneTemplate)
+			if listAll {
+				fmt.Println("Available templates:")
+				fmt.Println()
+				for _, name := range embedPkg.ListCRDTemplates() {
+					desc := embedPkg.CRDTemplateDescriptions[name]
+					fmt.Printf("  %-25s %s\n", name, desc)
+				}
+				fmt.Println()
+				fmt.Println("Usage: miup instance template <scenario>")
+				return nil
 			}
+
+			// Get scenario from args or flag
+			if len(args) > 0 {
+				scenario = args[0]
+			}
+			if scenario == "" {
+				scenario = "standalone"
+			}
+
+			content, err := embedPkg.GetCRDTemplate(scenario)
+			if err != nil {
+				return fmt.Errorf("template '%s' not found. Use --list to see available templates", scenario)
+			}
+			fmt.Print(string(content))
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&mode, "mode", "standalone", "Deployment mode: standalone or distributed")
-	cmd.Flags().BoolVar(&withTLS, "tls", false, "Include TLS configuration in template")
+	cmd.Flags().StringVar(&scenario, "scenario", "", "Template scenario (deprecated, use positional argument)")
+	cmd.Flags().BoolVar(&listAll, "list", false, "List all available templates")
+	_ = cmd.Flags().MarkHidden("scenario")
 
 	return cmd
 }
